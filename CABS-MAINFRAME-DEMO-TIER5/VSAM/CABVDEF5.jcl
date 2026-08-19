@@ -1,0 +1,58 @@
+//CABVDEF5 JOB (CABS,VSAM),'DEFINE FACTOR CARD AND PRINT CTL',
+//             CLASS=B,MSGCLASS=X,MSGLEVEL=(1,1),NOTIFY=&SYSUID
+//*****************************************************************
+//* CABVDEF5 - DEFINE THE FACTOR CARD FILE AND THE DOCUMENT       *
+//*            CONTROL ALTERNATE INDEX                            *
+//*                                                               *
+//* THE FACTOR CARD FILE HOLDS THE QUARTERLY FILINGS AS THE       *
+//* CARRIERS TYPED THEM.  CABRPT04 EDITS IT COLUMN BY COLUMN.     *
+//* NOTHING WRITES IT - THE CARDS ARE KEYED IN BY THE REGULATORY  *
+//* TEAM.  ALLOCATION IS HELD HERE ONLY - SEE CABS-STD-058.       *
+//*                                                               *
+//* THE ALTERNATE INDEX ON THE DOCUMENT CONTROL FILE WAS BUILT    *
+//* FOR THE 1999 MAILROOM SYSTEM SO THAT A DOCUMENT COULD BE      *
+//* FOUND BY INVOICE NUMBER.  THAT SYSTEM WAS REPLACED IN 2006    *
+//* AND THE PATH HAS NOT BEEN OPENED SINCE, BUT THE INDEX IS      *
+//* STILL DEFINED AND STILL BUILT BY THE NIGHTLY BLDINDEX.        *
+//*****************************************************************
+//STEP010  EXEC PGM=IDCAMS
+//SYSPRINT DD SYSOUT=*
+//SYSIN    DD *
+  DEFINE CLUSTER ( -
+         NAME(TELCABS.CABS.FACTOR.CARDS) -
+         NONINDEXED -
+         RECORDSIZE(80 80) -
+         SHAREOPTIONS(2 3) -
+         VOLUMES(CABS02) -
+         TRACKS(20 10) ) -
+     DATA ( -
+         NAME(TELCABS.CABS.FACTOR.CARDS.DATA) -
+         CISZ(4096) )
+  IF LASTCC = 0 THEN -
+     DEFINE CLUSTER ( -
+            NAME(TELCABS.CABS.PRTCTL.DOC.KSDS) -
+            INDEXED -
+            KEYS(7 0) -
+            RECORDSIZE(90 90) -
+            SHAREOPTIONS(2 3) -
+            VOLUMES(CABS03) -
+            CYLINDERS(5 2) ) -
+        DATA (NAME(TELCABS.CABS.PRTCTL.DOC.KSDS.DATA) CISZ(4096)) -
+        INDEX (NAME(TELCABS.CABS.PRTCTL.DOC.KSDS.INDEX) CISZ(2048))
+  IF LASTCC = 0 THEN -
+     DEFINE ALTERNATEINDEX ( -
+            NAME(TELCABS.CABS.PRTCTL.DOC.AIX) -
+            RELATE(TELCABS.CABS.PRTCTL.DOC.KSDS) -
+            KEYS(14 8) -
+            RECORDSIZE(90 900) -
+            UNIQUEKEY -
+            VOLUMES(CABS03) -
+            CYLINDERS(2 1) ) -
+        DATA (NAME(TELCABS.CABS.PRTCTL.DOC.AIX.DATA)) -
+        INDEX (NAME(TELCABS.CABS.PRTCTL.DOC.AIX.INDEX))
+  IF LASTCC = 0 THEN -
+     DEFINE PATH ( -
+            NAME(TELCABS.CABS.PRTCTL.DOC.PATH) -
+            PATHENTRY(TELCABS.CABS.PRTCTL.DOC.AIX) )
+/*
+//

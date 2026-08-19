@@ -1,0 +1,94 @@
+*****************************************************************
+* CABM0400 - FACTOR (PIU/PLU) MAINTENANCE MAPSET FOR CAB3       *
+* (CABONL04).  ONE PHYSICAL MAP SERVES BOTH THE EDIT SCREEN AND *
+* THE CONFIRM-BEFORE-UPDATE SCREEN - CONF IS PROTECTED UNTIL    *
+* P4000-CONFIRM-PROMPT UNPROTECTS IT ON THE SECOND SEND.        *
+* ORIGINAL 1993 VINTAGE - NO COLOR/HILIGHT.                     *
+*                                                                 *
+* REVISION HISTORY                                                *
+*   V1.00  1993-08-05  T.ANSELMO    INITIAL                      *
+*   V1.01  1996-03-19  T.ANSELMO    PSU FIELD ADDED (SPECIAL     *
+*                                   ACCESS FACTOR)                *
+*   V1.02  2011-06-09  M.OYELARAN   RECOMPILE ONLY                *
+*****************************************************************
+         PRINT NOGEN
+CABM04   DFHMSD TYPE=&SYSPARM,MODE=INOUT,LANG=COBOL,STORAGE=AUTO,     X
+               TIOAPFX=YES,CTRL=(FREEKB,FRSET),EXTATT=MAPONLY
+*
+FCTRMAP  DFHMDI SIZE=(24,80),LINE=1,COLUMN=1
+*
+         DFHMDF POS=(1,1),LENGTH=4,ATTRB=(ASKIP,NORM),INITIAL='CAB3'
+         DFHMDF POS=(1,10),LENGTH=32,ATTRB=(ASKIP,NORM),             X
+               INITIAL='FACTOR (PIU/PLU) MAINTENANCE'
+CDAT     DFHMDF POS=(1,70),LENGTH=8,ATTRB=(ASKIP,NORM)
+*
+         DFHMDF POS=(3,1),LENGTH=5,ATTRB=(ASKIP,NORM),INITIAL='OCN=>'
+OCNN     DFHMDF POS=(3,7),LENGTH=4,ATTRB=(UNPROT,IC,FSET)
+         DFHMDF POS=(3,15),LENGTH=7,ATTRB=(ASKIP,NORM),              X
+               INITIAL='STATE=>'
+STCD     DFHMDF POS=(3,23),LENGTH=2,ATTRB=(UNPROT,FSET)
+         DFHMDF POS=(3,28),LENGTH=6,ATTRB=(ASKIP,NORM),              X
+               INITIAL='LATA=>'
+LATA     DFHMDF POS=(3,35),LENGTH=3,ATTRB=(UNPROT,FSET,NUM),         X
+               PICIN='999',PICOUT='999'
+         DFHMDF POS=(3,41),LENGTH=8,ATTRB=(ASKIP,NORM),              X
+               INITIAL='EFF DT=>'
+EFFD     DFHMDF POS=(3,50),LENGTH=5,ATTRB=(UNPROT,FSET,NUM),         X
+               PICIN='99999',PICOUT='99999'
+*
+         DFHMDF POS=(6,1),LENGTH=10,ATTRB=(ASKIP,NORM),              X
+               INITIAL='PIU......'
+PIU      DFHMDF POS=(6,12),LENGTH=9,ATTRB=(UNPROT,FSET,NUM),         X
+               PICIN='9V99999',PICOUT='9.99999'
+         DFHMDF POS=(7,1),LENGTH=10,ATTRB=(ASKIP,NORM),              X
+               INITIAL='PLU......'
+PLU      DFHMDF POS=(7,12),LENGTH=9,ATTRB=(UNPROT,FSET,NUM),         X
+               PICIN='9V99999',PICOUT='9.99999'
+         DFHMDF POS=(8,1),LENGTH=10,ATTRB=(ASKIP,NORM),              X
+               INITIAL='PSU......'
+PSU      DFHMDF POS=(8,12),LENGTH=9,ATTRB=(UNPROT,FSET,NUM),         X
+               PICIN='9V99999',PICOUT='9.99999'
+         DFHMDF POS=(9,1),LENGTH=10,ATTRB=(ASKIP,NORM),              X
+               INITIAL='SOURCE...'
+SRC      DFHMDF POS=(9,12),LENGTH=1,ATTRB=(UNPROT,FSET)
+         DFHMDF POS=(10,1),LENGTH=10,ATTRB=(ASKIP,NORM),             X
+               INITIAL='RESTATE..'
+RSTS     DFHMDF POS=(10,12),LENGTH=1,ATTRB=(ASKIP,NORM)
+*
+         DFHMDF POS=(13,1),LENGTH=32,ATTRB=(ASKIP,NORM),             X
+               INITIAL='CONFIRM UPDATE (Y/N) ===>'
+CONF     DFHMDF POS=(13,34),LENGTH=1,ATTRB=(PROT,FSET)
+*
+         DFHMDF POS=(23,1),LENGTH=1,ATTRB=(ASKIP,NORM),INITIAL='*'
+MSGL     DFHMDF POS=(23,3),LENGTH=76,ATTRB=(ASKIP,BRT)
+*
+         DFHMDF POS=(24,1),LENGTH=79,ATTRB=(ASKIP,NORM),             X
+               INITIAL='PF3=EXIT  PF5=WRITE NEW QUARTER  PF12=MENU'
+*
+         DFHMSD TYPE=FINAL
+         END
+*
+*****************************************************************
+* FIELD INVENTORY - MAINTAINED BY HAND, NOT ASSEMBLER OUTPUT.   *
+* CABS-STD-021 SECTION 3.                                       *
+*                                                                 *
+* FIELD    ROW  COL  LEN  I/O  NOTES                            *
+* OCNN      03   07    4   I   KEY - CARRIER OCN                *
+* STCD      03   23    2   I   KEY - STATE CODE                 *
+* LATA      03   35    3   I   KEY - LATA                       *
+* EFFD      03   50    5   I   KEY - EFFECTIVE YYDDD            *
+* PIU       06   12    9  I/O  PERCENT INTERSTATE USAGE         *
+* PLU       07   12    9  I/O  PERCENT LOCAL USAGE              *
+* PSU       08   12    9  I/O  PERCENT SPECIAL ACCESS USAGE     *
+* SRC       09   12    1   I   FACTOR SOURCE                    *
+* RSTS      10   12    1   O   RESTATEMENT REQUIRED SWITCH      *
+* CONF      13   34    1   I   CONFIRM Y/N, DYNAMICALLY         *
+*                               (UN)PROTECTED BY CABONL04        *
+* CDAT      01   70    8   O   SYSTEM DATE                      *
+* MSGL      23   03   76   O   ONE LINE MESSAGE AREA            *
+*                                                                 *
+* CONF IS SENT PROTECTED (ATTRB=(PROT,FSET)) ON THE INITIAL      *
+* ENTRY SCREEN AND UNPROTECTED BY CABONL04 MOVING DFHBMFSE TO    *
+* CONFA BEFORE THE CONFIRM DATAONLY SEND - SEE CABONL04 P4100/   *
+* P4200.                                                          *
+*****************************************************************

@@ -1,0 +1,125 @@
+/* REXX */
+/*********************************************************************/
+/* CABGDGCL - GDG GENERATION CLEANUP                                 */
+/* APPLICATION : CABS | SETL                                        */
+/* INPUTS      : ARG1 = GDG BASE NAME, ARG2 = GENERATIONS TO KEEP    */
+/* OUTPUTS     : IDCAMS DELETE OF GENERATIONS BEYOND THE KEEP COUNT  */
+/* CONTROL     : NONE                                                */
+/* RESTART     : RERUNNABLE - IDEMPOTENT, A GENERATION ALREADY GONE  */
+/*               IS SIMPLY NOT LISTED BY LISTCAT ON THE NEXT RUN     */
+/*                                                                    */
+/* RUN WEEKLY FROM THE DASD HOUSEKEEPING STARTED TASK AGAINST EVERY  */
+/* GDG BASE IN THE CABS AND SETL DASD POOLS.  LISTS THE GENERATIONS  */
+/* OLDEST FIRST AND DELETES DOWN TO THE REQUESTED KEEP COUNT.        */
+/*                                                                    */
+/* THREE BASES ARE EXCLUDED REGARDLESS OF THE KEEP COUNT PASSED IN - */
+/* THEY CARRY REGULATORY RETENTION OBLIGATIONS THAT OUTLAST THE      */
+/* NORMAL OPERATIONAL GDG DEPTH AND ARE CLEANED UP SEPARATELY BY THE */
+/* RECORDS RETENTION TEAM ON THEIR OWN SCHEDULE.  SEE CABS-STD-071.  */
+/*                                                                    */
+/* REVISION HISTORY                                                  */
+/*   V1.00  1996-01-20  P.NAIR        INITIAL                        */
+/*   V1.02  2000-06-12  P.NAIR        EXCLUSION LIST ADDED AFTER THE */
+/*                                    SETTLEMENT AUDIT TRAIL GDG WAS */
+/*                                    ROLLED OFF BY THE OLD GENERIC  */
+/*                                    HOUSEKEEPING JOB                */
+/*   V1.03  2010-04-08  A.BUKOWSKI    ACCOUNTING EXCEPTION LOG ADDED */
+/*                                    TO THE EXCLUSION LIST           */
+/*   V1.04  2014-12-01  L.FERREIRA    RESTATEMENT ADJUSTMENT ARCHIVE */
+/*                                    ADDED TO THE EXCLUSION LIST     */
+/*                                    AFTER THE 2014 RATE CASE ASKED  */
+/*                                    FOR SEVEN YEARS OF HISTORY      */
+/*********************************************************************/
+
+PARSE ARG GDGBASE KEEPCNT .
+
+IF GDGBASE = '' | KEEPCNT = '' THEN DO
+  SAY 'CABGDGCL - USAGE: EX CABGDGCL GDGBASE KEEPCNT'
+  EXIT 16
+END
+
+IF \DATATYPE(KEEPCNT,'W') THEN DO
+  SAY 'CABGDGCL - KEEPCNT MUST BE A WHOLE NUMBER'
+  EXIT 16
+END
+
+/*-------------------------------------------------------------------*/
+/* EXCLUSION LIST - MUST NOT BE ROLLED OFF - AUDIT RETENTION.        */
+/* MAINTAINED BY HAND.  A NEW BASE NEEDING PERMANENT RETENTION MUST  */
+/* BE ADDED HERE BEFORE THE NEXT WEEKLY RUN OR IT WILL BE CLEANED UP */
+/* LIKE ANY OTHER GDG.                                                */
+/*-------------------------------------------------------------------*/
+EXCL.1 = 'TELCABS.SETL.AUDIT.TRAIL'
+EXCL.2 = 'TELCABS.CABS.ACCTG.EXCEPTION'
+EXCL.3 = 'TELCABS.SETL.RESTATE.ARCHIVE'
+EXCL.0 = 3
+
+DO I = 1 TO EXCL.0
+  IF GDGBASE = EXCL.I THEN DO
+    SAY 'CABGDGCL -' GDGBASE 'IS ON THE PERMANENT RETENTION LIST -',
+        'NO GENERATIONS DELETED'
+    EXIT 4
+  END
+END
+
+ADDRESS TSO
+
+/*-------------------------------------------------------------------*/
+/* LISTCAT THE BASE, OLDEST GENERATION FIRST.  IDCAMS LISTS NEWEST   */
+/* FIRST BY DEFAULT SO THE OUTPUT IS REVERSED BELOW.                 */
+/*-------------------------------------------------------------------*/
+X = OUTTRAP('LCAT.')
+"LISTCAT ENTRIES('"GDGBASE"') GDG ALL"
+X = OUTTRAP('OFF')
+
+GEN.0 = 0
+DO I = 1 TO LCAT.0
+  LINE = LCAT.I
+  IF POS('GDG BASE',LINE) > 0 THEN ITERATE
+  IF WORD(LINE,1) = 'NONVSAM' | WORD(LINE,1) = 'CLUSTER' THEN DO
+    GN = GEN.0 + 1
+    GEN.GN = STRIP(WORD(LINE,2))
+    GEN.0 = GN
+  END
+END
+
+IF GEN.0 = 0 THEN DO
+  SAY 'CABGDGCL -' GDGBASE 'HAS NO GENERATIONS OR LISTCAT FAILED'
+  EXIT 8
+END
+
+SAY 'CABGDGCL -' GDGBASE 'HAS' GEN.0 'GENERATION(S), KEEPING' KEEPCNT
+
+/* GEN.1 IS THE NEWEST (LISTCAT DEFAULT ORDER).  REVERSE THE STEM SO */
+/* GEN.1 BECOMES THE OLDEST - THAT IS THE ORDER WE DELETE IN.        */
+DO I = 1 TO GEN.0 % 2
+  J = GEN.0 - I + 1
+  TEMP = GEN.I
+  GEN.I = GEN.J
+  GEN.J = TEMP
+END
+
+DELCNT = 0
+TOKEEP = GEN.0 - KEEPCNT
+IF TOKEEP <= 0 THEN DO
+  SAY 'CABGDGCL - GENERATION COUNT AT OR BELOW THE KEEP THRESHOLD -',
+      'NOTHING TO DO'
+  EXIT 0
+END
+
+DO I = 1 TO TOKEEP
+  DSN = GEN.I
+  SAY 'CABGDGCL - DELETING' DSN
+  X = OUTTRAP('DELOUT.')
+  "DELETE '"DSN"'"
+  DELRC = RC
+  X = OUTTRAP('OFF')
+  IF DELRC = 0 THEN
+    DELCNT = DELCNT + 1
+  ELSE
+    SAY 'CABGDGCL - DELETE FAILED ON' DSN 'RC='DELRC
+END
+
+SAY 'CABGDGCL -' DELCNT 'OF' TOKEEP 'GENERATION(S) DELETED,' KEEPCNT,
+    'RETAINED FOR' GDGBASE
+EXIT 0

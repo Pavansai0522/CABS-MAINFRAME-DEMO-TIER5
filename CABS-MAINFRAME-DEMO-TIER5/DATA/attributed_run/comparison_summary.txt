@@ -1,0 +1,208 @@
+==============================================================================
+CABS TIER 5 -- BILL-TO-BILL COMPARISON REPORT
+==============================================================================
+generated      : 2026-08-15T06:58:40+00:00
+legacy         : DATA/legacy
+candidate      : DATA/candidate
+contract       : /sessions/sleepy-serene-ritchie/mnt/ClaudeAutomation/CABS-MAINFRAME-DEMO-TIER5/HARNESS/contracts/compare_contract.json
+levels run     : L1, L2, L3, L4, L5
+mode           : attributed
+
+OVERALL VERDICT: DIVERGENT
+
+------------------------------------------------------------------------------
+PER-LEVEL
+------------------------------------------------------------------------------
+LVL  NAME        VERDICT                   RECORDS     FIELDS VARIANCE
+L1   Record      DIVERGENT                 100,374          0     2507
+L2   Field       DIVERGENT                  97,858  2,438,327     2000
+L3   Control     MATCH                           2         18        0
+L4   Bill        NOT RUN                         0          0        0
+     not run: no bill header/detail datasets (CABSBHDR/CABSBILL) found on both sides; L4 runs after the billing steps have been executed
+L5   Settlement  DIVERGENT-BY-DESIGN           372          0       44
+
+------------------------------------------------------------------------------
+VERDICT COUNTS (over variances; everything not listed here matched)
+------------------------------------------------------------------------------
+  MATCH (fields)         2,433,794
+  DIVERGENT-BY-DESIGN        2027
+  DIVERGENT                  2524
+
+------------------------------------------------------------------------------
+VARIANCE TOTALS (penny level, candidate minus legacy)
+------------------------------------------------------------------------------
+  money/quantity variances   : 108
+  net overall                : -948.05095
+  absolute overall           : 16161066.53839
+  net, DIVERGENT             : -951.96687
+  net, DIVERGENT-BY-DESIGN   : 3.91592
+  unscaled identifier differences (not money, counted separately):
+    -                            809 record(s)
+    CD-CONN-HHMMSS               76 record(s)
+    CD-DISC-HHMMSS               76 record(s)
+    CD-CONN-DDD                  75 record(s)
+    CD-VC-ORIG-LATA              28 record(s)
+    CD-VC-ORIG-NPANXX            28 record(s)
+    CD-VC-TERM-NPANXX            28 record(s)
+    CD-VC-TERM-LATA              27 record(s)
+  largest net movements by field:
+    CD-VC-CONV-MIN               -472.74
+    CD-VC-CHG-MIN                -391.87
+    CD-SP-MPB-PCT                -82.25687
+    ST-OUR-PCT+ST-THEIR-PCT      -1.18408
+
+------------------------------------------------------------------------------
+WHAT DIVERGED
+------------------------------------------------------------------------------
+LVL  KIND / FIELD                       VERDICT                   COUNT        NET DELTA
+L1   missing_record / -                 DIVERGENT:16+BY-DESIG…     1698                0
+     traced to: D1
+     e.g. key=0211|336A937488977|137  legacy=1  candidate=0
+L1   duplicate_count_mismatch / -       DIVERGENT:809               809             -809
+     e.g. key=0211|336M954360870|15  legacy=2  candidate=1
+L2   string_value / CD-SRC-SYSTEM       DIVERGENT:1+BY-DESIGN…      243                0
+     traced to: D3
+     e.g. key=0211|336M954360870|48  legacy=EMI1  candidate=EMI2
+L2   decimal_value / CD-CONN-HHMMSS     DIVERGENT:74+BY-DESIG…       76          -350169
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=70522  candidate=121546
+L2   decimal_value / CD-DISC-HHMMSS     DIVERGENT:74+BY-DESIG…       76          -415937
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=70711  candidate=121703
+L2   string_value / CD-EDIT-STATUS      DIVERGENT:74+BY-DESIG…       76                0
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=7  candidate=0
+L2   decimal_value / CD-CONN-DDD        DIVERGENT:73+BY-DESIG…       75             -613
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=273  candidate=274
+L2   julian_date / CD-CONN-YYDDD        DIVERGENT:72+BY-DESIG…       75                0
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=24273 (2024-09-29)  candidate=24274 (2024-09-30)
+L2   julian_date / CD-DISC-YYDDD        DIVERGENT:73+BY-DESIG…       75                0
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=24273 (2024-09-29)  candidate=24274 (2024-09-30)
+L2   julian_date / CD-LOAD-YYDDD        DIVERGENT:73+BY-DESIG…       75                0
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=24273 (2024-09-29)  candidate=24274 (2024-09-30)
+L2   string_value / CD-RATE-ELEM        DIVERGENT:67+BY-DESIG…       68                0
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=LTRANS  candidate=DATASV
+L2   string_value / CD-USAGE-TYPE       DIVERGENT:66+BY-DESIG…       67                0
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=M  candidate=F
+L2   string_value / CD-REC-TYPE         DIVERGENT:60+BY-DESIG…       61                0
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=01  candidate=04
+L2   string_value / CD-JURIS-CD         DIVERGENT:48+BY-DESIG…       49                0
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=I  candidate=S
+L5   meet_point_percentages_do_not_sum… BY-DESIGN:44                 44         -1.18408
+     traced to: D4
+     e.g. key=M|9059|240901|23  legacy=102.52822  candidate=None
+L2   field_absent / CD-VC-CHG-MIN       DIVERGENT:36+BY-DESIG…       37                0
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=2.00  candidate=None
+L2   field_absent / CD-VC-CIC           DIVERGENT:36+BY-DESIG…       37                0
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=0  candidate=None
+L2   field_absent / CD-VC-CONV-MIN      DIVERGENT:36+BY-DESIG…       37                0
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=1.82  candidate=None
+L2   field_absent / CD-VC-END-OFFICE    DIVERGENT:36+BY-DESIG…       37                0
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=NOPIMADS17T  candidate=None
+L2   field_absent / CD-VC-ORIG-LATA     DIVERGENT:36+BY-DESIG…       37                0
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=128  candidate=None
+L2   field_absent / CD-VC-ORIG-NPANXX   DIVERGENT:36+BY-DESIG…       37                0
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=978291  candidate=None
+L2   field_absent / CD-VC-TANDEM-IND    DIVERGENT:36+BY-DESIG…       37                0
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=N  candidate=None
+L2   field_absent / CD-VC-TERM-LATA     DIVERGENT:36+BY-DESIG…       37                0
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=128  candidate=None
+L2   field_absent / CD-VC-TERM-NPANXX   DIVERGENT:36+BY-DESIG…       37                0
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=978962  candidate=None
+L2   field_absent / CD-VC-TRUNK-GRP     DIVERGENT:36+BY-DESIG…       37                0
+     traced to: D3
+     e.g. key=0211|336M954360870|15  legacy=K1628     candidate=None
+L2   decimal_value / CD-VC-CHG-MIN      DIVERGENT:19+BY-DESIG…       35          -391.87
+     traced to: D2, D8
+     e.g. key=0211|336N852397913|39  legacy=1.00  candidate=3.00
+L2   decimal_value / CD-VC-CONV-MIN     DIVERGENT:28                 28          -472.74
+     e.g. key=0211|336N852397913|39  legacy=0.88  candidate=2.55
+L2   decimal_value / CD-VC-ORIG-LATA    DIVERGENT:28                 28             -798
+     e.g. key=0211|336N852397913|39  legacy=492  candidate=476
+L2   decimal_value / CD-VC-ORIG-NPANXX  DIVERGENT:28                 28          2642922
+     e.g. key=0211|336N852397913|39  legacy=225745  candidate=205983
+L2   decimal_value / CD-VC-TERM-NPANXX  DIVERGENT:28                 28          -151864
+     e.g. key=0211|336N852397913|39  legacy=504547  candidate=251474
+L2   string_value / CD-VC-END-OFFICE    DIVERGENT:28                 28                0
+     e.g. key=0211|336N852397913|39  legacy=HUKULACG47W  candidate=KINAALMA03X
+L2   string_value / CD-VC-TRUNK-GRP     DIVERGENT:28                 28                0
+     e.g. key=0211|336N852397913|39  legacy=F6436     candidate=M6952   
+L2   decimal_value / CD-VC-TERM-LATA    DIVERGENT:27                 27            -1561
+     e.g. key=0211|336N852397913|39  legacy=492  candidate=477
+L2   field_absent / CD-SP-CIRCUIT-ID    DIVERGENT:26                 26                0
+     e.g. key=0212|770C033902992|125  legacy=None  candidate=25/DS3/OR/000883    
+L2   field_absent / CD-SP-MPB-IND       DIVERGENT:26                 26                0
+     e.g. key=0212|770C033902992|125  legacy=None  candidate=
+L2   field_absent / CD-SP-MPB-PCT       DIVERGENT:26                 26                0
+     e.g. key=0212|770C033902992|125  legacy=None  candidate=1c00874492
+L2   field_absent / CD-SP-OTHER-LEC     DIVERGENT:26                 26                0
+     e.g. key=0212|770C033902992|125  legacy=None  candidate=àì@
+L2   field_absent / CD-SP-QTY           DIVERGENT:26                 26                0
+     e.g. key=0212|770C033902992|125  legacy=None  candidate=162
+L2   field_absent / CD-SP-TERM-MONTHS   DIVERGENT:26                 26                0
+     e.g. key=0212|770C033902992|125  legacy=None  candidate=819
+L2   field_absent / CD-SP-USOC          DIVERGENT:26                 26                0
+     e.g. key=0212|770C033902992|125  legacy=None  candidate=  ±
+  ... and 25 further groups (see the JSON report)
+
+------------------------------------------------------------------------------
+SEEDED DEFECTS
+------------------------------------------------------------------------------
+  detection rate : 5/12
+  detected       : D1, D2, D3, D4, D8
+    D1   1682 variance(s) traced
+    D2   7 variance(s) traced
+    D3   285 variance(s) traced
+    D4   44 variance(s) traced
+    D8   9 variance(s) traced
+  missed         : D10, D11, D12, D5, D6, D7, D9
+    D10  BILLCALC  The pre-bill audit is run against… (dynamic)
+    D11  SORTEXIT  Fractional-cent residue accumulat… (parity_test_at_volume)
+    D12  BILLCALC  The fixed-width image a program b… (parity_test_at_element_volume)
+    D5   SETTLE    ISP-bound minute cap applied afte… (parity_test)
+    D6   BILLCALC  Account-level balancing proof com… (static)
+    D7   JURIS     Unknown prior factor defaulted to… (static)
+    D9   FORMAT    Carriage control character and it… (parity_test)
+
+  signed inputs:
+    /sessions/sleepy-serene-ritchie/mnt/ClaudeAutomation/CABS-MAINFRAME-DEMO-TIER5/SEALED/answer_key_bill_format_report.json
+      sha256 20759327c6e5f5a91e636556ce4ec4db1d3c781ffd1b2e2198837c20b55a28ca
+    /sessions/sleepy-serene-ritchie/mnt/ClaudeAutomation/CABS-MAINFRAME-DEMO-TIER5/SEALED/answer_key_ingest_rating.json
+      sha256 2257fce07989a29084969c9346ae722832329f3418d042cc817c533fe09f5d11
+    /sessions/sleepy-serene-ritchie/mnt/ClaudeAutomation/CABS-MAINFRAME-DEMO-TIER5/SEALED/answer_key_juris_settle.json
+      sha256 1878ea5c0d9cbaeec3083a34ce99971d0beb1a8523857f62ce511e2e1ecfdc0b
+    /sessions/sleepy-serene-ritchie/mnt/ClaudeAutomation/CABS-MAINFRAME-DEMO-TIER5/SEALED/answer_key_reference_layer.json
+      sha256 b1897d6acf585af5e240820da9f39df48a1ccbbe08e680980342bb4332e1af1a
+    /sessions/sleepy-serene-ritchie/mnt/ClaudeAutomation/CABS-MAINFRAME-DEMO-TIER5/HARNESS/defect_signatures.json
+      sha256 2e5a1565ba47355646eb471eaaa2006f67c215b0141aa126e374f6ab0e85458c
+
+------------------------------------------------------------------------------
+HOW TO READ THIS
+------------------------------------------------------------------------------
+  MATCH               the two sides agree.
+  DIVERGENT-BY-DESIGN the variance traces to a known seeded defect in the
+                      legacy. Scored positively -- the transform found
+                      something real. It needs a business decision about the
+                      defect, not a code change to silence the harness.
+  DIVERGENT           a variance with nothing behind it. This one blocks.
+
+  A level that did not run did not pass. A missed seeded defect is a
+  statement about the harness, not about the candidate.
+==============================================================================

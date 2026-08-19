@@ -1,0 +1,56 @@
+//CABS6200 JOB (CABS,BILL),'SUSPENSE AGEING AND FACTOR EXC',
+//             CLASS=C,MSGCLASS=X,MSGLEVEL=(1,1),
+//             NOTIFY=&SYSUID,REGION=0M,TIME=1440
+//*****************************************************************
+//* CABS6200 - SUSPENSE AGEING AND FACTOR EXCEPTION REPORTS       *
+//*                                                               *
+//* THE SUSPENSE FILE IS CONCATENATED ACROSS FOUR GENERATIONS SO  *
+//* THAT ANYTHING THE RECYCLE JOB HAS NOT CLEARED IN A WEEK IS    *
+//* STILL VISIBLE.                                                *
+//*****************************************************************
+//STEP010  EXEC CABPRPTB,
+//             PGMNAME=CABRPT03,
+//             CYCLE=%%CYCLDT,
+//             BILLPER=%%BILLPR,
+//             RUNID=%%RUNID,
+//             JOBNM=CABS6200,
+//             STEPNM=STEP010,
+//             AGEBAS=%%AGEBAS,
+//             OLDDAY=%%OLDDAY,
+//             INGDG='0',
+//             OUTGDG='+1'
+//RPTSTEP.CTLIN    DD DUMMY
+//RPTSTEP.PROOFIN  DD DUMMY
+//RPTSTEP.BDTLIN   DD DUMMY
+//RPTSTEP.CARRMST  DD DUMMY
+//RPTSTEP.SUSIN    DD DSN=TELCABS.CABS.BILL.SUSP(0),DISP=SHR
+//         DD DSN=TELCABS.CABS.BILL.SUSP(-1),DISP=SHR
+//         DD DSN=TELCABS.CABS.BILL.SUSP(-2),DISP=SHR
+//         DD DSN=TELCABS.CABS.BILL.SUSP(-3),DISP=SHR
+//RPTSTEP.AGEOUT   DD SYSOUT=*
+//RPTSTEP.SYSIN    DD *
+RN%%RUNID  %%CYCLDT%%BILLPR00CABS6200STEP010YY%%AGEBAS%%SEVSEL%%OLDDAY%%DTLSW
+/*
+//*
+//STEP020  EXEC CABPRPTB,
+//             PGMNAME=CABRPT04,
+//             CYCLE=%%CYCLDT,
+//             BILLPER=%%BILLPR,
+//             RUNID=%%RUNID,
+//             JOBNM=CABS6200,
+//             STEPNM=STEP020,
+//             QUARTR=%%QUARTR,
+//             VARLIM=%%VARLIM,
+//             INGDG='0',
+//             OUTGDG='+1'
+//RPTSTEP.CTLIN    DD DUMMY
+//RPTSTEP.PROOFIN  DD DUMMY
+//RPTSTEP.BDTLIN   DD DUMMY
+//RPTSTEP.CARRMST  DD DUMMY
+//RPTSTEP.FCTIN    DD DSN=TELCABS.CABS.FACTOR(0),DISP=SHR
+//RPTSTEP.CRDIN    DD DSN=TELCABS.CABS.FACTOR.CARDS,DISP=SHR
+//RPTSTEP.EXCOUT   DD SYSOUT=*
+//RPTSTEP.SYSIN    DD *
+RN%%RUNID  %%CYCLDT%%BILLPR00CABS6200STEP020YY%%QUARTR%%VARLIMY%%DEFSW
+/*
+//

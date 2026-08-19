@@ -1,0 +1,109 @@
+*****************************************************************
+* CABM0200 - CARRIER (OCN) INQUIRY MAPSET FOR CAB1 (CABONL02)   *
+* BROWSES TELCABS.CABS.CARRIER (VSAM KSDS) FORWARD/BACKWARD ON  *
+* THE OCN KEY.  ORIGINAL 1991 VINTAGE - NO COLOR/HILIGHT.       *
+* SEE CABS-STD-021.                                              *
+*                                                                 *
+* REVISION HISTORY                                                *
+*   V1.00  1991-04-09  R.KESSLER    INITIAL                      *
+*   V1.01  1997-01-14  R.KESSLER    ISP CAP / RECIP FIELDS ADDED *
+*                                   FOR THE FCC RECIP COMP RULE   *
+*   V1.02  2011-06-09  M.OYELARAN   RECOMPILE ONLY                *
+*****************************************************************
+         PRINT NOGEN
+CABM02   DFHMSD TYPE=&SYSPARM,MODE=INOUT,LANG=COBOL,STORAGE=AUTO,     X
+               TIOAPFX=YES,CTRL=(FREEKB,FRSET),EXTATT=MAPONLY
+*
+CARRMAP  DFHMDI SIZE=(24,80),LINE=1,COLUMN=1
+*
+         DFHMDF POS=(1,1),LENGTH=4,ATTRB=(ASKIP,NORM),INITIAL='CAB1'
+         DFHMDF POS=(1,10),LENGTH=32,ATTRB=(ASKIP,NORM),             X
+               INITIAL='CARRIER (OCN) INQUIRY'
+CDAT     DFHMDF POS=(1,70),LENGTH=8,ATTRB=(ASKIP,NORM)
+*
+         DFHMDF POS=(3,1),LENGTH=6,ATTRB=(ASKIP,NORM),INITIAL='OCN ==>'
+OCNN     DFHMDF POS=(3,9),LENGTH=4,ATTRB=(UNPROT,IC,FSET)
+*
+         DFHMDF POS=(5,1),LENGTH=10,ATTRB=(ASKIP,NORM),              X
+               INITIAL='NAME.....'
+CNAM     DFHMDF POS=(5,12),LENGTH=40,ATTRB=(ASKIP,NORM)
+         DFHMDF POS=(6,1),LENGTH=10,ATTRB=(ASKIP,NORM),              X
+               INITIAL='ACNA/CIC.'
+ACNA     DFHMDF POS=(6,12),LENGTH=3,ATTRB=(ASKIP,NORM)
+CIC      DFHMDF POS=(6,17),LENGTH=4,ATTRB=(ASKIP,NORM)
+         DFHMDF POS=(7,1),LENGTH=10,ATTRB=(ASKIP,NORM),              X
+               INITIAL='TYPE.....'
+CTYP     DFHMDF POS=(7,12),LENGTH=1,ATTRB=(ASKIP,NORM)
+*
+         DFHMDF POS=(9,1),LENGTH=10,ATTRB=(ASKIP,NORM),              X
+               INITIAL='BILL CYC.'
+BCYC     DFHMDF POS=(9,12),LENGTH=2,ATTRB=(ASKIP,NORM)
+BMED     DFHMDF POS=(9,16),LENGTH=1,ATTRB=(ASKIP,NORM)
+CURR     DFHMDF POS=(9,19),LENGTH=3,ATTRB=(ASKIP,NORM)
+TERM     DFHMDF POS=(9,24),LENGTH=3,ATTRB=(ASKIP,NORM)
+         DFHMDF POS=(10,1),LENGTH=10,ATTRB=(ASKIP,NORM),             X
+               INITIAL='CR LIMIT.'
+CLIM     DFHMDF POS=(10,12),LENGTH=15,ATTRB=(ASKIP,NORM),            X
+               PICOUT='---,---,---.99'
+*
+         DFHMDF POS=(12,1),LENGTH=10,ATTRB=(ASKIP,NORM),             X
+               INITIAL='DFLT PIU.'
+DPIU     DFHMDF POS=(12,12),LENGTH=9,ATTRB=(ASKIP,NORM),             X
+               PICOUT='9.99999'
+         DFHMDF POS=(13,1),LENGTH=10,ATTRB=(ASKIP,NORM),             X
+               INITIAL='DFLT PLU.'
+DPLU     DFHMDF POS=(13,12),LENGTH=9,ATTRB=(ASKIP,NORM),             X
+               PICOUT='9.99999'
+FSRC     DFHMDF POS=(13,24),LENGTH=1,ATTRB=(ASKIP,NORM)
+*
+         DFHMDF POS=(15,1),LENGTH=10,ATTRB=(ASKIP,NORM),             X
+               INITIAL='RECIP RT.'
+RRAT     DFHMDF POS=(15,12),LENGTH=11,ATTRB=(ASKIP,NORM)
+         DFHMDF POS=(16,1),LENGTH=10,ATTRB=(ASKIP,NORM),             X
+               INITIAL='ISP CAP..'
+ISCP     DFHMDF POS=(16,12),LENGTH=15,ATTRB=(ASKIP,NORM)
+RAO      DFHMDF POS=(16,29),LENGTH=3,ATTRB=(ASKIP,NORM)
+*
+         DFHMDF POS=(18,1),LENGTH=10,ATTRB=(ASKIP,NORM),             X
+               INITIAL='STATUS...'
+ASW      DFHMDF POS=(18,12),LENGTH=1,ATTRB=(ASKIP,NORM)
+EFDT     DFHMDF POS=(18,15),LENGTH=8,ATTRB=(ASKIP,NORM)
+EXDT     DFHMDF POS=(18,25),LENGTH=8,ATTRB=(ASKIP,NORM)
+*
+         DFHMDF POS=(23,1),LENGTH=1,ATTRB=(ASKIP,NORM),INITIAL='*'
+MSGL     DFHMDF POS=(23,3),LENGTH=76,ATTRB=(ASKIP,BRT)
+*
+         DFHMDF POS=(24,1),LENGTH=79,ATTRB=(ASKIP,NORM),             X
+               INITIAL='PF3=EXIT  PF7=BACKWARD  PF8=FORWARD  PF12=MEX
+               NU'
+*
+         DFHMSD TYPE=FINAL
+         END
+*
+*****************************************************************
+* FIELD INVENTORY - MAINTAINED BY HAND, NOT ASSEMBLER OUTPUT.   *
+* CABS-STD-021 SECTION 3.                                       *
+*                                                                 *
+* FIELD    ROW  COL  LEN  I/O  NOTES                            *
+* OCNN      03   09    4   I   SEARCH KEY, ALSO BROWSE ANCHOR   *
+* CNAM      05   12   40   O   CARRIER NAME                     *
+* ACNA      06   12    3   O   ACNA CODE                        *
+* CIC       06   17    4   O   CARRIER IDENTIFICATION CODE      *
+* CTYP      07   12    1   O   CARRIER TYPE (I/C/L/W/R)         *
+* BCYC      09   12    2   O   BILL CYCLE                       *
+* BMED      09   16    1   O   BILL MEDIA                       *
+* CURR      09   19    3   O   BILLING CURRENCY                 *
+* TERM      09   24    3   O   TERMS DAYS                       *
+* CLIM      10   12   15   O   CREDIT LIMIT, EDITED              *
+* DPIU      12   12    9   O   DEFAULT PIU FACTOR               *
+* DPLU      13   12    9   O   DEFAULT PLU FACTOR               *
+* FSRC      13   24    1   O   FACTOR SOURCE (C/T/S)            *
+* RRAT      15   12   11   O   RECIPROCAL COMPENSATION RATE     *
+* ISCP      16   12   15   O   ISP TRAFFIC CAP, MINUTES         *
+* RAO       16   29    3   O   CMDS RAO CODE                    *
+* ASW       18   12    1   O   ACTIVE SWITCH                    *
+* EFDT      18   15    8   O   EFFECTIVE YYDDD                  *
+* EXDT      18   25    8   O   EXPIRATION YYDDD                 *
+* CDAT      01   70    8   O   SYSTEM DATE                      *
+* MSGL      23   03   76   O   ONE LINE MESSAGE AREA            *
+*****************************************************************

@@ -1,0 +1,473 @@
+       IDENTIFICATION DIVISION.
+      *****************************************************************
+      * CABING11 - SUSPENSE RECYCLE AND REINJECTION                   *
+      * APPLICATION : CABS                                            *
+      * INPUTS      : SUSIN   TELCABS.CABS.USAGE.SUSPENSE(0) CABSERR  *
+      *               CARRMST TELCABS.CABS.CARRIER VSAM KSDS CABSCARR*
+      * OUTPUTS     : EDTOUT  TELCABS.CABS.USAGE.EDITED(+1)  CABSCDR  *
+      *               RCYOUT  TELCABS.CABS.USAGE.RECYCLE(+1) -        *
+      *               SUSOUT  TELCABS.CABS.USAGE.SUSPENSE(+1) CABSERR *
+      * CONTROL     : CTLOUT                               CABSCTL    *
+      * BALANCE     : CT-READ = CT-WRITTEN + CT-REJECTED +            *
+      *               CT-SUMMARISED + CT-CARRIED-FWD (CT-WRITTEN IS   *
+      *               EDTOUT REINJECTIONS, CT-REJECTED IS SUSOUT      *
+      *               ABANDONMENTS, CT-CARRIED-FWD IS RCYOUT STILL-   *
+      *               FAILING RECORDS CARRIED TO THE NEXT CYCLE)      *
+      * RESTART     : FULL RERUN                                     *
+      * REVISION HISTORY                                              *
+      *   V1.00  1990-09-17  D.OKONKWO    INITIAL RECYCLE PASS - OCN  *
+      *                      RE-CHECK AGAINST CARRMST ONLY            *
+      *   V1.01  1992-04-05  D.OKONKWO    ADDED IN-STORAGE ATTEMPT    *
+      *                      TABLE, ABANDON THRESHOLD 4 ATTEMPTS      *
+      *   V1.02  1995-08-22  J.M.CASTILLO ATTEMPT COUNT NOW CARRIED   *
+      *                      FORWARD IN SU-FILLER OF THE RECYCLED REC *
+      *   V1.03  1999-02-11  P.NAIR       ATTEMPT TABLE EXPANDED TO   *
+      *                      200 ENTRIES FOR PEAK SUSPENSE VOLUMES    *
+      *   V1.04  2005-06-30  A.BUKOWSKI   SEVERITY-BASED DISPATCH     *
+      *                      ADDED - WARN VS ERROR VS FATAL HANDLING  *
+      *   V1.05  2010-11-14  S.MARCHETTI  RECOMPILE - LE V8 MIGRATION,*
+      *                      NO LOGIC CHANGE                          *
+      *   V1.06  2016-03-08  K.ADEYEMI    HASH ACCUMULATION MOVED TO  *
+      *                      SHARED CABHASH SUBROUTINE                *
+      *   V1.07  2019-09-25  T.VANCE      RECOMPILE ONLY - LE V8      *
+      *                      UPGRADE, NO LOGIC CHANGE                 *
+      *****************************************************************
+       PROGRAM-ID.    CABING11.
+       AUTHOR.        RADIANT-DIGITAL-CABS-TEAM.
+       DATE-WRITTEN.  1990-09-17.
+       DATE-COMPILED.
+       ENVIRONMENT DIVISION.
+       CONFIGURATION SECTION.
+       SOURCE-COMPUTER.   IBM-370.
+       OBJECT-COMPUTER.   IBM-370.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT SUSIN   ASSIGN TO SUSIN
+               ORGANIZATION IS SEQUENTIAL
+               FILE STATUS  IS WS-FS-INPUT.
+           SELECT CARRMST ASSIGN TO CARRMST
+               ORGANIZATION IS INDEXED
+               ACCESS MODE  IS RANDOM
+               RECORD KEY   IS CR-OCN
+               FILE STATUS  IS WS-FS-TABLE.
+           SELECT EDTOUT  ASSIGN TO EDTOUT
+               ORGANIZATION IS SEQUENTIAL
+               FILE STATUS  IS WS-FS-OUTPUT.
+           SELECT RCYOUT  ASSIGN TO RCYOUT
+               ORGANIZATION IS SEQUENTIAL
+               FILE STATUS  IS WS-FS-RCY.
+           SELECT SUSOUT  ASSIGN TO SUSOUT
+               ORGANIZATION IS SEQUENTIAL
+               FILE STATUS  IS WS-FS-SUSPENSE.
+           SELECT CTLOUT  ASSIGN TO CTLOUT
+               ORGANIZATION IS SEQUENTIAL
+               FILE STATUS  IS WS-FS-CONTROL.
+
+       DATA DIVISION.
+       FILE SECTION.
+       FD  SUSIN
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 300 CHARACTERS.
+       01  SUS-IN-RECORD               PIC X(300).
+
+       FD  CARRMST
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD.
+           COPY CABSCARR.
+
+       FD  EDTOUT
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 200 CHARACTERS.
+       01  EDT-OUT-RECORD               PIC X(200).
+
+      * RCYOUT CARRIES THE REBUILT CDR PLUS THE CURRENT ATTEMPT
+      * COUNT SO A DOWNSTREAM JCL STEP CAN FOLD IT BACK INTO
+      * TOMORROW'S SUSIN FOR THE NEXT RECYCLE PASS.
+       FD  RCYOUT
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 210 CHARACTERS.
+       01  RCY-OUT-RECORD               PIC X(210).
+       01  RCY-OUT-STRUCT REDEFINES RCY-OUT-RECORD.
+           05  RCY-CDR-PORTION           PIC X(200).
+           05  RCY-ATTEMPT-CNT           PIC 9(02).
+           05  RCY-FILLER                PIC X(08).
+
+       FD  SUSOUT
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 300 CHARACTERS.
+       01  SUS-OUT-RECORD               PIC X(300).
+
+       FD  CTLOUT
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 180 CHARACTERS.
+       01  CTL-OUT-RECORD               PIC X(180).
+
+       WORKING-STORAGE SECTION.
+       COPY CABSWRK.
+
+      * OWN WORKING STORAGE FOLLOWS - CABSWRK SUPPLIES THE STANDARD
+      * SWITCHES, COUNTERS, ACCUMULATORS, FILE STATUS, ERROR CODES,
+      * SUSPENSE LAYOUT, DATE WORK AREA AND CONTROL RECORD.
+      * CABS-CDR-RECORD BELOW IS THE WORKING COPY THE ORIGINAL CDR
+      * IS REBUILT INTO FROM SU-ORIG-RECORD.
+       COPY CABSCDR.
+
+       01  WS-PGM-CONSTANTS.
+           05  WS-PGM-NAME              PIC X(08) VALUE 'CABING11'.
+
+       01  WS-ADDL-FILE-STATUS.
+           05  WS-FS-RCY                PIC X(02) VALUE '00'.
+
+       01  WS-CYCLE-DATE-WORK.
+           05  WS-CYCLE-YYDDD           PIC 9(05).
+           05  WS-CYCLE-YYDDD-R REDEFINES WS-CYCLE-YYDDD.
+               10  WS-CYCLE-YY           PIC 9(02).
+               10  WS-CYCLE-DDD          PIC 9(03).
+
+      * CABS-STD-001 SUPPORT - KEYED IN-STORAGE ATTEMPT TABLE.  ONE
+      * ENTRY PER DISTINCT CDR KEY SEEN THIS RUN.  ATTEMPTS SEED
+      * FROM WS-SU-PRIOR-ATTEMPTS (BELOW) WHEN THE KEY IS FIRST SEEN.
+       01  WS-ATTEMPT-TABLE.
+           05  WS-AT-COUNT-USED         PIC S9(03) COMP-3 VALUE 0.
+           05  WS-AT-ENTRY OCCURS 100 TIMES.
+               10  WS-AT-OCN             PIC X(04).
+               10  WS-AT-BAN             PIC X(13).
+               10  WS-AT-SEQ             PIC 9(09).
+               10  WS-AT-ATTEMPTS        PIC 9(02).
+               10  WS-AT-LAST-SEV        PIC X(01).
+
+       01  WS-ATTEMPT-SEARCH-WORK.
+           05  WS-AT-SUB                PIC S9(04) COMP-3.
+           05  WS-AT-FOUND-SW           PIC X(01) VALUE 'N'.
+               88  WS-AT-FOUND            VALUE 'Y'.
+
+      * THE ATTEMPT COUNT SURVIVING FROM A PRIOR CYCLE IS SMUGGLED
+      * THROUGH SU-FILLER'S FIRST TWO BYTES - SEE V1.02 ABOVE.
+       01  WS-SU-FILLER-WORK            PIC X(45).
+       01  WS-SU-FILLER-NUM REDEFINES WS-SU-FILLER-WORK.
+           05  WS-SU-PRIOR-ATTEMPTS      PIC 9(02).
+           05  WS-SU-FILLER-REST         PIC X(43).
+
+       01  WS-RECYCLABLE-WORK.
+           05  WS-RECYCLABLE-SW         PIC X(01) VALUE 'N'.
+               88  WS-RECYCLABLE           VALUE 'Y'.
+
+       01  WS-CARR-FOUND-WORK.
+           05  WS-CARR-FOUND-SW         PIC X(01) VALUE 'N'.
+               88  WS-CARR-FOUND           VALUE 'Y'.
+
+       01  WS-CABDTCNV-PARMS.
+           05  CV-FUNCTION-CD           PIC X(01) VALUE '1'.
+           05  CV-YYDDD-IN              PIC 9(05).
+           05  CV-PIVOT-YY              PIC 9(02).
+           05  CV-CCYYMMDD-OUT          PIC 9(08).
+           05  CV-RETURN-CD             PIC X(02).
+
+       01  WS-CABOCNVL-PARMS.
+           05  OV-OCN-IN                PIC X(04).
+           05  OV-EFF-YYDDD-IN          PIC 9(05).
+           05  OV-FOUND-SW              PIC X(01).
+               88  OV-OCN-FOUND           VALUE 'Y'.
+           05  OV-EFFECTIVE-SW          PIC X(01).
+               88  OV-OCN-EFFECTIVE        VALUE 'Y'.
+
+       01  WS-CABHASH-PARMS.
+           05  HS-HASH-SEQ-IN           PIC S9(09) COMP-3.
+           05  HS-HASH-OCN-IN           PIC X(04).
+
+       01  WS-SUSPENSE-BUILD-WORK.
+           05  WS-DETECT-PARA-LIT       PIC X(30).
+
+       01  WS-CONTROL-BUILD-WORK.
+           05  WS-CTL-STEP-SAVE         PIC X(08) VALUE 'S200PROC'.
+
+       01  WS-ABEND-WORK.
+           05  WS-ABEND-CD              PIC X(04).
+           05  WS-ABEND-RSN             PIC X(40).
+
+       01  WS-MISC-FLAGS.
+           05  WS-DEBUG-SW              PIC X(01) VALUE 'N'.
+               88  WS-DEBUG-ON            VALUE 'Y'.
+
+       PROCEDURE DIVISION.
+
+       S000-MAINLINE SECTION.
+       P0000-MAINLINE.
+           PERFORM P1000-INIT THRU P1000-EXIT.
+           PERFORM P2000-PROCESS THRU P2000-EXIT
+               UNTIL WS-EOF.
+           PERFORM P8000-CONTROL THRU P8000-EXIT.
+           PERFORM P9000-TERM THRU P9000-EXIT.
+           STOP RUN.
+
+       S100-INIT SECTION.
+       P1000-INIT.
+           PERFORM P1100-OPEN-FILES THRU P1100-EXIT.
+           PERFORM P1200-INIT-CONTROL-KEY THRU P1200-EXIT.
+           PERFORM P1300-INIT-ATTEMPT-TABLE THRU P1300-EXIT.
+           PERFORM P2100-READ-SUSIN THRU P2100-EXIT.
+       P1000-EXIT.
+           EXIT.
+
+       P1100-OPEN-FILES.
+           OPEN INPUT  SUSIN.
+           OPEN INPUT  CARRMST.
+           OPEN OUTPUT EDTOUT.
+           OPEN OUTPUT RCYOUT.
+           OPEN OUTPUT SUSOUT.
+           OPEN OUTPUT CTLOUT.
+           IF WS-FS-INPUT NOT = '00'
+               MOVE 'I011' TO WS-ABEND-CD
+               MOVE 'CABING11 - SUSIN OPEN FAILED' TO WS-ABEND-RSN
+               CALL 'CABABEND' USING WS-ABEND-CD WS-ABEND-RSN.
+       P1100-EXIT.
+           EXIT.
+
+       P1200-INIT-CONTROL-KEY.
+           MOVE 'CABI11RUN001' TO CT-RUN-ID.
+           MOVE WS-PGM-NAME    TO CT-PROCESS-ID.
+           MOVE 1              TO CT-STEP-SEQ.
+           MOVE '1'            TO CV-FUNCTION-CD.
+           MOVE ZERO           TO CV-YYDDD-IN.
+           MOVE DW-PIVOT-YY    TO CV-PIVOT-YY.
+           CALL 'CABDTCNV' USING WS-CABDTCNV-PARMS.
+           MOVE CV-YYDDD-IN    TO WS-CYCLE-YYDDD.
+           MOVE WS-CYCLE-YYDDD TO CT-CYCLE-YYDDD.
+       P1200-EXIT.
+           EXIT.
+
+       P1300-INIT-ATTEMPT-TABLE.
+           MOVE ZERO TO WS-AT-COUNT-USED.
+           PERFORM P1310-CLEAR-ATTEMPT-ENTRY THRU P1310-EXIT
+               VARYING WS-AT-SUB FROM 1 BY 1
+               UNTIL WS-AT-SUB > 100.
+       P1300-EXIT.
+           EXIT.
+
+       P1310-CLEAR-ATTEMPT-ENTRY.
+           MOVE SPACES TO WS-AT-OCN (WS-AT-SUB).
+           MOVE SPACES TO WS-AT-BAN (WS-AT-SUB).
+           MOVE ZERO   TO WS-AT-SEQ (WS-AT-SUB).
+           MOVE ZERO   TO WS-AT-ATTEMPTS (WS-AT-SUB).
+           MOVE SPACES TO WS-AT-LAST-SEV (WS-AT-SUB).
+       P1310-EXIT.
+           EXIT.
+
+       S200-PROCESS SECTION.
+       P2000-PROCESS.
+           MOVE 'N' TO WS-RECYCLABLE-SW.
+           PERFORM P2200-REBUILD-CDR THRU P2200-EXIT.
+           PERFORM P2300-LOOKUP-ATTEMPT-SLOT THRU P2300-EXIT.
+           PERFORM P4000-RECYCLE-DISPATCH THRU P4900-EXIT.
+           PERFORM P5000-CHECK-RECYCLABLE THRU P5000-EXIT.
+           PERFORM P6000-ROUTE-OUTPUT THRU P6000-EXIT.
+           PERFORM P2100-READ-SUSIN THRU P2100-EXIT.
+       P2000-EXIT.
+           EXIT.
+
+       P2100-READ-SUSIN.
+           READ SUSIN
+               AT END
+                   MOVE 'Y' TO WS-EOF-SW
+               NOT AT END
+                   ADD 1 TO WS-READ-CNT
+                   MOVE SUS-IN-RECORD TO CABS-SUSPENSE-RECORD.
+       P2100-EXIT.
+           EXIT.
+
+      * REBUILDS THE ORIGINAL CDR FROM SU-ORIG-RECORD AND LIFTS THE
+      * PRIOR ATTEMPT COUNT OUT OF THE SUSPENSE RECORD'S FILLER.
+       P2200-REBUILD-CDR.
+           MOVE SU-ORIG-RECORD TO CABS-CDR-RECORD.
+           MOVE SU-FILLER      TO WS-SU-FILLER-WORK.
+       P2200-EXIT.
+           EXIT.
+
+       P2300-LOOKUP-ATTEMPT-SLOT.
+           MOVE 'N' TO WS-AT-FOUND-SW.
+           PERFORM P2310-SEARCH-ATTEMPT-TAB THRU P2310-EXIT
+               VARYING WS-AT-SUB FROM 1 BY 1
+               UNTIL WS-AT-SUB > WS-AT-COUNT-USED
+               OR WS-AT-FOUND.
+           IF NOT WS-AT-FOUND
+               PERFORM P2320-INSERT-ATTEMPT-SLOT THRU P2320-EXIT.
+       P2300-EXIT.
+           EXIT.
+
+       P2310-SEARCH-ATTEMPT-TAB.
+           IF WS-AT-OCN (WS-AT-SUB) = CD-OCN
+               AND WS-AT-BAN (WS-AT-SUB) = CD-BAN
+               AND WS-AT-SEQ (WS-AT-SUB) = CD-SEQ-NBR
+               MOVE 'Y' TO WS-AT-FOUND-SW.
+       P2310-EXIT.
+           EXIT.
+
+      * TABLE OVERFLOW (MORE THAN 100 DISTINCT KEYS THIS RUN) REUSES
+      * SLOT 100 RATHER THAN ABENDING - A KNOWN LIMIT SINCE 1996.
+       P2320-INSERT-ATTEMPT-SLOT.
+           IF WS-AT-COUNT-USED < 100
+               ADD 1 TO WS-AT-COUNT-USED
+               MOVE WS-AT-COUNT-USED TO WS-AT-SUB
+           ELSE
+               MOVE 100 TO WS-AT-SUB.
+           MOVE CD-OCN     TO WS-AT-OCN (WS-AT-SUB).
+           MOVE CD-BAN     TO WS-AT-BAN (WS-AT-SUB).
+           MOVE CD-SEQ-NBR TO WS-AT-SEQ (WS-AT-SUB).
+           MOVE SPACES     TO WS-AT-LAST-SEV (WS-AT-SUB).
+           IF WS-SU-PRIOR-ATTEMPTS IS NUMERIC
+               MOVE WS-SU-PRIOR-ATTEMPTS TO WS-AT-ATTEMPTS (WS-AT-SUB)
+           ELSE
+               MOVE ZERO TO WS-AT-ATTEMPTS (WS-AT-SUB).
+       P2320-EXIT.
+           EXIT.
+
+      * DISPATCHES ON SEVERITY.  FATAL NEVER RECYCLES - JUMPS
+      * STRAIGHT TO ABANDONMENT BY FORCING THE ATTEMPT COUNT TO 99.
+      * ERROR-SEVERITY GETS ONE ATTEMPT ADDED AND THEN LEAVES VIA
+      * P4900-EXIT.  WARN-SEVERITY IS HANDLED BELOW.
+       P4000-RECYCLE-DISPATCH.
+           IF SU-FATAL
+               GO TO P4400-RECYCLE-FATAL.
+           IF SU-WARN
+               GO TO P4200-RECYCLE-WARN.
+           GO TO P4300-RECYCLE-ERROR.
+
+      * WARN-SEVERITY RECORDS ARE NOTED BUT DO NOT BURN A RECYCLE
+      * ATTEMPT ON THEIR OWN - A WARNING MEANS THE DATA IS USABLE,
+      * JUST FLAGGED, SO IT SHOULD BE ALLOWED MORE PASSES THAN AN
+      * OUTRIGHT ERROR BEFORE IT IS AGED OUT TO SUSOUT.
+       P4200-RECYCLE-WARN.
+           MOVE 'W' TO WS-AT-LAST-SEV (WS-AT-SUB).
+
+       P4300-RECYCLE-ERROR.
+           MOVE 'E' TO WS-AT-LAST-SEV (WS-AT-SUB).
+           ADD 1 TO WS-AT-ATTEMPTS (WS-AT-SUB).
+           GO TO P4900-EXIT.
+
+       P4400-RECYCLE-FATAL.
+           MOVE 'F' TO WS-AT-LAST-SEV (WS-AT-SUB).
+           MOVE 99 TO WS-AT-ATTEMPTS (WS-AT-SUB).
+
+       P4900-EXIT.
+           EXIT.
+
+      * REFERENCE-DATA RECHECK.  ONLY OCN/BAN FAILURES ARE RETESTED
+      * AGAINST CARRMST - OTHER ERROR CLASSES NEED MASTERS THIS PASS
+      * DOES NOT HAVE ACCESS TO AND REMAIN IN THE RECYCLE CHAIN.
+       P5000-CHECK-RECYCLABLE.
+           MOVE 'N' TO WS-RECYCLABLE-SW.
+           IF SU-ERR-CODE = EC-OCN-UNKNOWN
+               OR SU-ERR-CODE = EC-BAN-UNKNOWN
+               MOVE CD-OCN TO CR-OCN
+               READ CARRMST
+                   INVALID KEY MOVE 'N' TO WS-CARR-FOUND-SW
+                   NOT INVALID KEY MOVE 'Y' TO WS-CARR-FOUND-SW
+               PERFORM P5100-VERIFY-EFFECTIVE THRU P5100-EXIT.
+       P5000-EXIT.
+           EXIT.
+
+       P5100-VERIFY-EFFECTIVE.
+           IF WS-CARR-FOUND
+               MOVE CD-OCN         TO OV-OCN-IN
+               MOVE WS-CYCLE-YYDDD TO OV-EFF-YYDDD-IN
+               CALL 'CABOCNVL' USING WS-CABOCNVL-PARMS
+               IF OV-OCN-EFFECTIVE
+                   MOVE 'Y' TO WS-RECYCLABLE-SW.
+       P5100-EXIT.
+           EXIT.
+
+      * RECYCLABLE GOES BACK IN AT EDTOUT.  NOT RECYCLABLE AND
+      * ALREADY AT 4 OR MORE ATTEMPTS IS ABANDONED TO SUSOUT.
+      * OTHERWISE IT CARRIES FORWARD ONE MORE CYCLE VIA RCYOUT.
+       P6000-ROUTE-OUTPUT.
+           IF WS-RECYCLABLE
+               PERFORM P6100-WRITE-EDTOUT THRU P6100-EXIT
+           ELSE
+               IF WS-AT-ATTEMPTS (WS-AT-SUB) NOT < 4
+                   PERFORM P6300-WRITE-SUSOUT-ABANDON THRU P6300-EXIT
+               ELSE
+                   PERFORM P6200-WRITE-RCYOUT THRU P6200-EXIT.
+       P6000-EXIT.
+           EXIT.
+
+       P6100-WRITE-EDTOUT.
+           WRITE EDT-OUT-RECORD FROM CABS-CDR-RECORD.
+           ADD 1 TO WS-WRITE-CNT.
+           MOVE CD-SEQ-NBR TO HS-HASH-SEQ-IN.
+           MOVE CD-OCN     TO HS-HASH-OCN-IN.
+           CALL 'CABHASH' USING WS-ACC-SEQ-HASH HS-HASH-SEQ-IN
+                                 WS-ACC-OCN-HASH HS-HASH-OCN-IN.
+           ADD CD-VC-CONV-MIN TO WS-ACC-MINUTES.
+       P6100-EXIT.
+           EXIT.
+
+       P6200-WRITE-RCYOUT.
+           MOVE CABS-CDR-RECORD TO RCY-CDR-PORTION.
+           MOVE WS-AT-ATTEMPTS (WS-AT-SUB) TO RCY-ATTEMPT-CNT.
+           MOVE SPACES TO RCY-FILLER.
+           WRITE RCY-OUT-RECORD.
+           ADD 1 TO WS-CFWD-CNT.
+       P6200-EXIT.
+           EXIT.
+
+       P6300-WRITE-SUSOUT-ABANDON.
+           MOVE 'P6300-WRITE-SUSOUT-ABANDON' TO WS-DETECT-PARA-LIT.
+           MOVE WS-DETECT-PARA-LIT TO SU-DETECT-PARA.
+           MOVE WS-PGM-NAME         TO SU-DETECT-PGM.
+           MOVE CT-RUN-ID           TO SU-RUN-ID.
+           MOVE CABS-CDR-RECORD     TO SU-ORIG-RECORD.
+           MOVE SPACES              TO SU-FILLER.
+           CALL 'CABERRWR' USING CABS-SUSPENSE-RECORD.
+           WRITE SUS-OUT-RECORD FROM CABS-SUSPENSE-RECORD.
+           ADD 1 TO WS-REJECT-CNT.
+       P6300-EXIT.
+           EXIT.
+
+       S800-CONTROL SECTION.
+       P8000-CONTROL.
+           MOVE WS-PGM-NAME      TO CT-JOBNAME.
+           MOVE WS-CTL-STEP-SAVE TO CT-STEPNAME.
+           MOVE ZERO             TO CT-BILL-PERIOD.
+           MOVE ZERO             TO CT-RERUN-NBR.
+           MOVE WS-READ-CNT      TO CT-READ.
+           MOVE WS-WRITE-CNT     TO CT-WRITTEN.
+           MOVE WS-REJECT-CNT    TO CT-REJECTED.
+           MOVE ZERO             TO CT-SUMMARISED.
+           MOVE WS-CFWD-CNT      TO CT-CARRIED-FWD.
+           MOVE WS-ACC-MINUTES   TO CT-HASH-MINUTES.
+           MOVE WS-ACC-AMOUNT    TO CT-HASH-AMOUNT.
+           MOVE WS-ACC-SEQ-HASH  TO CT-HASH-SEQ.
+           MOVE WS-ACC-OCN-HASH  TO CT-HASH-OCN.
+           IF CT-READ = CT-WRITTEN + CT-REJECTED
+                        + CT-SUMMARISED + CT-CARRIED-FWD
+               MOVE 'B' TO CT-BAL-IND
+           ELSE
+               MOVE 'O' TO CT-BAL-IND.
+           MOVE ZERO   TO CT-RC.
+           MOVE SPACES TO CT-ABEND-CD.
+           MOVE SPACES TO CT-RESTART-KEY.
+           MOVE SPACES TO CT-FILLER.
+           WRITE CTL-OUT-RECORD FROM CABS-CONTROL-RECORD.
+       P8000-EXIT.
+           EXIT.
+
+       S900-TERM SECTION.
+       P9000-TERM.
+           CLOSE SUSIN.
+           CLOSE CARRMST.
+           CLOSE EDTOUT.
+           CLOSE RCYOUT.
+           CLOSE SUSOUT.
+           CLOSE CTLOUT.
+       P9000-EXIT.
+           EXIT.

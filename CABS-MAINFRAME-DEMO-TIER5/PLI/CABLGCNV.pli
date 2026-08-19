@@ -1,0 +1,293 @@
+/*********************************************************************/
+/* CABLGCNV - LEGACY 1987 USAGE RECORD CONVERSION                    */
+/* APPLICATION : CABS                                                */
+/* INPUTS      : LEGIN    TELCABS.CABS.USAGE.LEGACY87(0)   FB 133    */
+/* OUTPUTS     : CDROUT   TELCABS.CABS.USAGE.CDR(+1)       FB 200    */
+/*             : CNVPRT   SYSPRINT - CONVERSION SUMMARY              */
+/* CONTROL     : CTLOUT   TELCABS.CABS.CONTROL(+1)      CABSCTL      */
+/* BALANCE     : LC-READ = LC-CONVERTED + LC-REJECTED                */
+/* RESTART     : FULL RERUN - READ ONLY AGAINST THE LEGACY EXTRACT   */
+/*                                                                    */
+/* CONVERTS THE PRE-1988 133 BYTE USAGE RECORD FORMAT INTO THE       */
+/* CURRENT 200 BYTE CABSCDR LAYOUT USED BY THE INGEST FAMILY.        */
+/* RETAINED FOR THE REMAINING SITES ON THE 1987 FORMAT - INVOKED     */
+/* FROM THE MAIN INGEST CONTROL STREAM (BATCH/CONTROL/CABCTL04.CBL)  */
+/* WHEN THE LEGACY FORMAT SWITCH IS SET FOR AN INCOMING FEED, SO A   */
+/* SITE STILL SUBMITTING ON THE ORIGINAL RECORDING FORMAT DOES NOT   */
+/* HAVE TO BE RESEQUENCED THROUGH A SEPARATE INGEST PATH.            */
+/*                                                                    */
+/* %INCLUDE CABCDRLY PULLS THE SHARED LEGACY-TO-CURRENT FIELD        */
+/* CROSSWALK TABLE THAT THE ON-LINE CONVERSION UTILITY ALSO USES SO  */
+/* THE TWO CONVERSION PATHS CANNOT DRIFT APART ON THE STATIC         */
+/* DEFAULT VALUES BELOW.                                              */
+/*                                                                    */
+/* REVISION HISTORY                                                  */
+/*   V1.00  1987-11-02  P.NAIR        INITIAL - WRITTEN AHEAD OF THE */
+/*                                    1988 CDR LAYOUT CUTOVER SO     */
+/*                                    SITES COULD CONVERT THEIR OWN  */
+/*                                    BACKLOG BEFORE GOING LIVE       */
+/*   V1.02  1988-09-30  P.NAIR        CUTOVER RELEASE - ALL SITES    */
+/*                                    MOVED TO THE 200 BYTE FORMAT   */
+/*                                    ON THE WIRE; THIS PROGRAM KEPT */
+/*                                    FOR THE HANDFUL STILL SENDING  */
+/*                                    OLD-FORMAT TAPES               */
+/*   V1.04  1994-02-11  P.NAIR        LATA FIELD ADDED TO THE TARGET */
+/*                                    LAYOUT - LEFT ZERO ON CONVERTED*/
+/*                                    RECORDS, ASSIGNED DOWNSTREAM   */
+/*   V1.05  2003-06-18  R.OKONKWO     RECOMPILE FOR THE NEW ESTATE   */
+/*                                    STANDARD PL/I RETURN CODES     */
+/*   V1.06  2019-05-14  M.OYELARAN    RECOMPILE ONLY, OS PL/I V2     */
+/*                                    OPTIMIZING COMPILER            */
+/*********************************************************************/
+CABLGCNV: PROC OPTIONS(MAIN);
+
+   /*------------------------------------------------------------*/
+   /* LEGACY 1987 USAGE RECORD - 133 BYTES                        */
+   /*------------------------------------------------------------*/
+   DCL 1 LG_REC,
+         2 LG_OCN            CHAR(4),
+         2 LG_BAN             CHAR(9),
+         2 LG_CALL_YYDDD      PIC '99999',
+         2 LG_CALL_HHMM       PIC '9999',
+         2 LG_ORIG_NPA        PIC '999',
+         2 LG_ORIG_NXX        PIC '999',
+         2 LG_TERM_NPA        PIC '999',
+         2 LG_TERM_NXX        PIC '999',
+         2 LG_DURATION        PIC '99999',
+         2 LG_JURIS_CD        CHAR(1),
+         2 LG_RATE_CD         CHAR(4),
+         2 LG_CIRCUIT_ID      CHAR(12),
+         2 LG_TRUNK_GRP       CHAR(6),
+         2 LG_TERM_OCN        CHAR(4),
+         2 LG_STATE_CD        CHAR(2),
+         2 LG_AMOUNT_SIGN     CHAR(1),
+         2 LG_AMOUNT          PIC '9999999V99',
+         2 LG_SOURCE_SYS      CHAR(2),
+         2 LG_FILLER          CHAR(53);
+
+   DCL LEGIN FILE RECORD INPUT SEQUENTIAL
+       ENV(FB RECSIZE(133) BLKSIZE(13300));
+
+   /*------------------------------------------------------------*/
+   /* CURRENT CABSCDR USAGE RECORD - 200 BYTES                    */
+   /*------------------------------------------------------------*/
+   DCL 1 CD_REC,
+         2 CD_OCN             CHAR(4),
+         2 CD_BAN              CHAR(13),
+         2 CD_CALL_YYDDD       PIC '99999',
+         2 CD_CALL_HHMMSS      PIC '999999',
+         2 CD_ORIG_NPA         PIC '999',
+         2 CD_ORIG_NXX         PIC '999',
+         2 CD_ORIG_LINE        PIC '9999',
+         2 CD_TERM_NPA         PIC '999',
+         2 CD_TERM_NXX         PIC '999',
+         2 CD_TERM_LINE        PIC '9999',
+         2 CD_DURATION         PIC '999999',
+         2 CD_JURIS_CD         CHAR(1),
+         2 CD_RATE_ELEM        CHAR(6),
+         2 CD_TARIFF_CD        CHAR(4),
+         2 CD_CIRCUIT_ID       CHAR(20),
+         2 CD_TRUNK_GRP        CHAR(8),
+         2 CD_TERM_OCN         CHAR(4),
+         2 CD_STATE_CD         CHAR(2),
+         2 CD_AMOUNT_SIGN      CHAR(1),
+         2 CD_AMOUNT           PIC '9999999999V99',
+         2 CD_SOURCE_SYS       CHAR(2),
+         2 CD_CONVERT_SW       CHAR(1),
+         2 CD_CONVERT_YYDDD    PIC '99999',
+         2 CD_LATA             PIC '999',
+         2 CD_FILLER           CHAR(77);
+
+   DCL CDROUT FILE RECORD OUTPUT SEQUENTIAL
+       ENV(FB RECSIZE(200) BLKSIZE(20000));
+
+   DCL 1 CTL_REC,
+         2 CT_RUN_ID        CHAR(12),
+         2 CT_PROCESS_ID    CHAR(8),
+         2 CT_STEP_SEQ      PIC '999',
+         2 CT_CYCLE_YYDDD   PIC '99999',
+         2 CT_BILL_PERIOD   PIC '999999',
+         2 CT_RERUN_NBR     PIC '99',
+         2 CT_JOBNAME       CHAR(8),
+         2 CT_STEPNAME      CHAR(8),
+         2 CT_READ          FIXED DEC(11),
+         2 CT_WRITTEN       FIXED DEC(11),
+         2 CT_REJECTED      FIXED DEC(11),
+         2 CT_SUMMARISED    FIXED DEC(11),
+         2 CT_CARRIED_FWD   FIXED DEC(11),
+         2 CT_FILLER        CHAR(115);
+
+   DCL CTLOUT FILE RECORD OUTPUT SEQUENTIAL
+       ENV(FB RECSIZE(180) BLKSIZE(18000));
+
+   DCL CNVPRT FILE STREAM OUTPUT PRINT;
+
+   /*------------------------------------------------------------*/
+   /* SHARED LEGACY-TO-CURRENT CROSSWALK CONSTANTS.  KEPT IN A    */
+   /* SEPARATE INCLUDE MEMBER SO THE ON-LINE CONVERSION UTILITY   */
+   /* (CICS TRANSACTION LGCV) USES THE SAME DEFAULTS.              */
+   /*------------------------------------------------------------*/
+   %INCLUDE CABCDRLY;
+
+   DCL EOF_SW BIT(1) INIT('0'B);
+   DCL WS_READ_CNT       FIXED DEC(11) INIT(0);
+   DCL WS_CONVERTED_CNT  FIXED DEC(11) INIT(0);
+   DCL WS_REJECTED_CNT   FIXED DEC(11) INIT(0);
+   DCL WS_LINE_CNT       FIXED DEC(5)  INIT(99);
+   DCL WS_PAGE_NBR       FIXED DEC(5)  INIT(0);
+   DCL WS_TODAY_YYDDD    PIC '99999';
+
+   DCL (SUBSTR, INDEX, DATE) BUILTIN;
+
+   ON ENDFILE(LEGIN) EOF_SW = '1'B;
+
+   ON ERROR BEGIN;
+      PUT FILE(CNVPRT) EDIT(
+         '*** CABLGCNV ABENDED - ONCODE ', ONCODE())
+         (SKIP, A, F(6));
+      SIGNAL ERROR;
+   END;
+
+   CALL P_INIT;
+   DO WHILE (EOF_SW = '0'B);
+      CALL P_READ_LEGACY;
+      IF EOF_SW = '0'B THEN
+         CALL P_CONVERT_ONE;
+   END;
+   CALL P_TERM;
+
+   /*==============================================================*/
+   P_INIT: PROC;
+      OPEN FILE(LEGIN);
+      OPEN FILE(CDROUT) OUTPUT;
+      OPEN FILE(CTLOUT) OUTPUT;
+      OPEN FILE(CNVPRT) OUTPUT LINESIZE(132) PAGESIZE(60);
+      WS_TODAY_YYDDD = SUBSTR(DATE(),1,5);
+      CALL P_HEADING;
+   END P_INIT;
+
+   /*==============================================================*/
+   P_READ_LEGACY: PROC;
+      READ FILE(LEGIN) INTO(LG_REC);
+      IF EOF_SW = '0'B THEN
+         WS_READ_CNT = WS_READ_CNT + 1;
+   END P_READ_LEGACY;
+
+   /*==============================================================*/
+   /* A LEGACY RECORD WITH A BLANK OCN OR A JURISDICTION CODE NOT   */
+   /* PRESENT IN THE VALID-JURISDICTION LIST IS REJECTED RATHER     */
+   /* THAN CONVERTED WITH A GUESSED VALUE - THE 1987 FORMAT HAS NO  */
+   /* EDIT VALIDATION OF ITS OWN, SO BAD DATA THAT WOULD NEVER HAVE */
+   /* REACHED THE CURRENT INGEST EDITS CAN STILL BE SITTING IN AN   */
+   /* OLD TAPE.                                                      */
+   /*==============================================================*/
+   P_CONVERT_ONE: PROC;
+      IF LG_OCN = ' ' THEN DO;
+         WS_REJECTED_CNT = WS_REJECTED_CNT + 1;
+         CALL P_REPORT_LINE('REJECTED - BLANK OCN');
+         RETURN;
+      END;
+      IF INDEX(VALID_JURIS_LIST,LG_JURIS_CD) = 0 THEN DO;
+         WS_REJECTED_CNT = WS_REJECTED_CNT + 1;
+         CALL P_REPORT_LINE('REJECTED - INVALID JURISDICTION CODE');
+         RETURN;
+      END;
+
+      CALL P_BUILD_CDR;
+      WRITE FILE(CDROUT) FROM(CD_REC);
+      WS_CONVERTED_CNT = WS_CONVERTED_CNT + 1;
+      CALL P_REPORT_LINE('CONVERTED');
+   END P_CONVERT_ONE;
+
+   /*==============================================================*/
+   /* FIELD BY FIELD CROSSWALK.  FIELDS THAT DO NOT EXIST IN THE    */
+   /* 1987 FORMAT (LINE NUMBER, TARIFF CODE, LATA) TAKE THE DEFAULT */
+   /* FROM THE %INCLUDE CABCDRLY MEMBER RATHER THAN A LOCAL LITERAL */
+   /* SO A CHANGE TO THE DEFAULT ONLY HAS TO BE MADE ONCE.          */
+   /*==============================================================*/
+   P_BUILD_CDR: PROC;
+      CD_OCN          = LG_OCN;
+      CD_BAN          = '0000' || LG_BAN;
+      CD_CALL_YYDDD   = LG_CALL_YYDDD;
+      CD_CALL_HHMMSS  = LG_CALL_HHMM || '00';
+      CD_ORIG_NPA     = LG_ORIG_NPA;
+      CD_ORIG_NXX     = LG_ORIG_NXX;
+      CD_ORIG_LINE    = DEFAULT_LINE_NBR;
+      CD_TERM_NPA     = LG_TERM_NPA;
+      CD_TERM_NXX     = LG_TERM_NXX;
+      CD_TERM_LINE    = DEFAULT_LINE_NBR;
+      CD_DURATION     = '0' || LG_DURATION;
+      CD_JURIS_CD     = LG_JURIS_CD;
+      CD_RATE_ELEM    = LG_RATE_CD || '  ';
+      CD_TARIFF_CD    = DEFAULT_TARIFF_CD;
+      CD_CIRCUIT_ID   = LG_CIRCUIT_ID || '        ';
+      CD_TRUNK_GRP    = LG_TRUNK_GRP || '  ';
+      CD_TERM_OCN     = LG_TERM_OCN;
+      CD_STATE_CD     = LG_STATE_CD;
+      CD_AMOUNT_SIGN  = LG_AMOUNT_SIGN;
+      CD_AMOUNT       = '000' || LG_AMOUNT;
+      CD_SOURCE_SYS   = LG_SOURCE_SYS;
+      CD_CONVERT_SW   = 'Y';
+      CD_CONVERT_YYDDD = WS_TODAY_YYDDD;
+      CD_LATA         = DEFAULT_LATA;         /* ASSIGNED DOWNSTREAM */
+      CD_FILLER       = ' ';
+   END P_BUILD_CDR;
+
+   /*==============================================================*/
+   P_REPORT_LINE: PROC(MSG_TEXT);
+      DCL MSG_TEXT CHAR(*);
+      IF WS_LINE_CNT >= 55 THEN
+         CALL P_HEADING;
+      PUT FILE(CNVPRT) EDIT(
+         LG_OCN, LG_BAN, LG_CALL_YYDDD, MSG_TEXT)
+         (SKIP, X(2), A(4), X(1), A(9), X(1), F(5), X(3), A);
+      WS_LINE_CNT = WS_LINE_CNT + 1;
+   END P_REPORT_LINE;
+
+   /*==============================================================*/
+   P_HEADING: PROC;
+      WS_PAGE_NBR = WS_PAGE_NBR + 1;
+      PUT FILE(CNVPRT) PAGE;
+      PUT FILE(CNVPRT) EDIT(
+         'CABLGCNV - LEGACY 1987 USAGE RECORD CONVERSION',
+         'PAGE', WS_PAGE_NBR)
+         (SKIP, A, COLUMN(85), A, F(5));
+      PUT FILE(CNVPRT) EDIT(
+         'OCN  BAN       CALL-YYDDD   RESULT')
+         (SKIP(2), A);
+      WS_LINE_CNT = 4;
+   END P_HEADING;
+
+   /*==============================================================*/
+   P_TERM: PROC;
+      PUT FILE(CNVPRT) EDIT('CONTROL TOTALS')(SKIP(3), A);
+      PUT FILE(CNVPRT) EDIT(
+         'RECORDS READ      :', WS_READ_CNT)(SKIP, A, F(9));
+      PUT FILE(CNVPRT) EDIT(
+         'RECORDS CONVERTED :', WS_CONVERTED_CNT)(SKIP, A, F(9));
+      PUT FILE(CNVPRT) EDIT(
+         'RECORDS REJECTED  :', WS_REJECTED_CNT)(SKIP, A, F(9));
+
+      CT_RUN_ID      = 'LGCNVRUN001 ';
+      CT_PROCESS_ID  = 'CABLGCNV';
+      CT_STEP_SEQ    = 10;
+      CT_CYCLE_YYDDD = WS_TODAY_YYDDD;
+      CT_BILL_PERIOD = 0;
+      CT_RERUN_NBR   = 0;
+      CT_JOBNAME     = 'CABP0180';
+      CT_STEPNAME    = 'STEP010';
+      CT_READ        = WS_READ_CNT;
+      CT_WRITTEN     = WS_CONVERTED_CNT;
+      CT_REJECTED    = WS_REJECTED_CNT;
+      CT_SUMMARISED  = 0;
+      CT_CARRIED_FWD = 0;
+      CT_FILLER      = ' ';
+      WRITE FILE(CTLOUT) FROM(CTL_REC);
+
+      CLOSE FILE(LEGIN);
+      CLOSE FILE(CDROUT);
+      CLOSE FILE(CTLOUT);
+      CLOSE FILE(CNVPRT);
+   END P_TERM;
+
+END CABLGCNV;

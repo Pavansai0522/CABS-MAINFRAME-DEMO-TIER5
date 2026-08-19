@@ -1,0 +1,459 @@
+{
+ "signature_version": "1.0",
+ "asset": "CABS Tier 5 wholesale access billing reference estate",
+ "purpose": "Machine-readable fingerprints that attribute an observed variance to a seeded defect recorded in SEALED/answer_key_*.json.",
+ "handling": "WITHHELD DURING A BLIND RUN. This file names the seeded defects and describes how each one shows up in the data; handing it to a blind run would leak the answer as surely as the answer key itself. verdict.py refuses to load it when --blind is set.",
+ "precedence": "Rules are evaluated in order. The first match wins, so the more specific fingerprints come first.",
+ "substitutions": {
+  "$cycle_start": "YYDDD of the first day of the billing cycle, supplied by the contract",
+  "$band_boundaries": "the tariff band boundary quantities, supplied by the contract",
+  "$probe_keys": "the keys of the exact-band-boundary probe records, supplied by USAGE/boundary_probes.json"
+ },
+ "rules": [
+  {
+   "defect": "D8",
+   "name": "band boundary selected the lower band",
+   "confidence": "high",
+   "match": {
+    "levels": [
+     "L2"
+    ],
+    "kinds": [
+     "decimal_value"
+    ],
+    "layouts": [
+     "CABSCDR"
+    ],
+    "fields": [
+     "CD-VC-CHG-MIN",
+     "CD-VC-CONV-MIN"
+    ],
+    "legacy": {
+     "in_set": "$band_boundaries"
+    }
+   },
+   "evidence": "The legacy quantity is exactly a tariff band boundary. CABRAT06 P3210-TEST-ONE-BAND tests IF WS-BAND-QTY > R3-PL-FROM, a strict greater-than, so a quantity equal to a band's lower bound fails that band and is matched by the preceding, lower-volume, higher-priced band. The upper bound is tested correctly with NOT >, which is what makes the asymmetry easy to read past.",
+   "note": "Boundary quantities are placed deliberately by the generator and listed in USAGE/boundary_probes.json. A random sample essentially never lands on one."
+  },
+  {
+   "defect": "D2",
+   "name": "tandem switching truncated where its siblings round",
+   "confidence": "high",
+   "match": {
+    "levels": [
+     "L2"
+    ],
+    "kinds": [
+     "decimal_value"
+    ],
+    "layouts": [
+     "CABSCDR"
+    ],
+    "fields": [
+     "CD-VC-CHG-MIN"
+    ],
+    "witness": {
+     "CD-VC-TANDEM-IND": {
+      "eq": "Y"
+     }
+    },
+    "delta": {
+     "abs_le": "1.00"
+    }
+   },
+   "evidence": "A sub-unit movement on a tandem-switched record. CABRAT03 rates five elements; four use COMPUTE ... ROUNDED and P5420-TS-APPLY-RATE alone uses a plain COMPUTE, which truncates at the fifth decimal. Tandem switching also carries an extra multiplier - the switch count - so it accumulates more significant digits than its siblings before the value is cut, and gives up more of them.",
+   "note": "The per-record loss sits inside any normal bill-to-bill tolerance, which is why it has survived. It is visible only as an aggregate."
+  },
+  {
+   "defect": "D2",
+   "name": "tandem switching rate element truncated where its siblings round",
+   "confidence": "high",
+   "match": {
+    "levels": [
+     "L2"
+    ],
+    "kinds": [
+     "decimal_value"
+    ],
+    "layouts": [
+     "CABSCDR"
+    ],
+    "fields": [
+     "CD-VC-CHG-MIN"
+    ],
+    "witness": {
+     "CD-RATE-ELEM": {
+      "regex": "^TANSW"
+     }
+    }
+   },
+   "evidence": "As above, matched on the rate element rather than the tandem indicator."
+  },
+  {
+   "defect": "D1",
+   "name": "fatal-status usage present in the billable stream",
+   "confidence": "high",
+   "match": {
+    "levels": [
+     "L1"
+    ],
+    "kinds": [
+     "missing_record",
+     "extra_record",
+     "duplicate_count_mismatch"
+    ],
+    "layouts": [
+     "CABSCDR"
+    ],
+    "witness": {
+     "CD-EDIT-STATUS": {
+      "in": [
+       "6",
+       "7",
+       "8",
+       "9"
+      ]
+     }
+    }
+   },
+   "evidence": "The record differs in presence between the two sides and carries an edit status the 88-level CD-FATAL makes true. CABING05 P4300-SPLIT-FATAL has no exit paragraph and no terminating GO TO, so control falls through into P4400-SPLIT-CLEAN and every fatal-status CDR is written to both the suspense file and the clean billable stream, incrementing both WS-REJECT-CNT and WS-WRITE-CNT.",
+   "note": "This is also why CT-BAL-IND is 'O' on every run that carries a fatal record. Check L3 for the corresponding balancing failure before accepting this attribution."
+  },
+  {
+   "defect": "D1",
+   "name": "fatal-status record double counted in the control totals",
+   "confidence": "medium",
+   "match": {
+    "levels": [
+     "L3"
+    ],
+    "kinds": [
+     "balance_equation_failed"
+    ],
+    "layouts": [
+     "CABSCTL"
+    ],
+    "delta": {
+     "gt": "0"
+    }
+   },
+   "evidence": "The sum of the balancing terms exceeds CT-READ, which is the signature of a record counted both as written and as rejected. CABING05 increments WS-REJECT-CNT and WS-WRITE-CNT for the same record.",
+   "note": "Medium confidence: any double count produces this shape. Corroborate against the L1 fatal-status finding for the same run."
+  },
+  {
+   "defect": "D3",
+   "name": "restatement window dropped usage across a year boundary",
+   "confidence": "medium",
+   "match": {
+    "levels": [
+     "L1",
+     "L2"
+    ],
+    "layouts": [
+     "CABSCDR"
+    ],
+    "witness": {
+     "CD-CONN-YYDDD": {
+      "lt": "$cycle_start"
+     }
+    }
+   },
+   "evidence": "The record differs and its connect date falls before the cycle start, in the range a restatement window is supposed to cover. CABJUR07 P1400-BUILD-WINDOW derives the window end with COMPUTE WS-WA-THRU-N = WS-WA-FROM-N + WS-RS-SPAN-DAYS, adding a day count directly to a packed YYDDD, which does not roll the year. P2300-WINDOW-TEST then rejects every record dated in the first days of the following year and counts them as CT-CARRIED-FWD, so the run still balances.",
+   "note": "Correct routines for day-number conversion (P6500-JULIAN-TO-ABS) and for adding days across a year end (P6520-ADD-DAYS) already sit in the same program. The window derivation calls neither."
+  },
+  {
+   "defect": "D3",
+   "name": "impossible YYDDD produced by day arithmetic on a packed date",
+   "confidence": "high",
+   "match": {
+    "levels": [
+     "L2"
+    ],
+    "kinds": [
+     "julian_date"
+    ],
+    "context": {
+     "legacy_iso": {
+      "present": false
+     }
+    }
+   },
+   "evidence": "The legacy side carries a YYDDD that is not a real date -- day 366 of a non-leap year, or a day-of-year above 366. Values of that shape are produced by adding a day count to a packed YYDDD instead of to a date."
+  },
+  {
+   "defect": "D4",
+   "name": "meet-point percentage residual absorbed into our share",
+   "confidence": "high",
+   "match": {
+    "levels": [
+     "L5"
+    ],
+    "kinds": [
+     "meet_point_percentages_do_not_sum_to_100"
+    ]
+   },
+   "evidence": "The two filed percentages do not sum to 100.00000. CABSET01 P3200-PCT-RESIDUAL computes the residual and executes ADD WS-MW-RESIDUAL-PCT TO WS-MW-OUR-PCT, so the difference is booked as our revenue. EC-MPB-PCT-INVALID exists in CABSERR and is used elsewhere in the same program, but is not raised here; the settlement completes and P3700-RECONCILE cannot detect it because our share plus their share still equals gross after the adjustment.",
+   "note": "The split reconciling is not evidence that the percentages are right. Both assertions are needed, which is why L5 makes them separately."
+  },
+  {
+   "defect": "D4",
+   "name": "meet-point split reconciles against an adjusted percentage",
+   "confidence": "medium",
+   "match": {
+    "levels": [
+     "L5"
+    ],
+    "kinds": [
+     "settlement_counterparty_period"
+    ],
+    "fields": [
+     "ST-OUR-SHARE",
+     "ST-THEIR-SHARE"
+    ],
+    "delta": {
+     "ne": "0"
+    }
+   },
+   "evidence": "Our share and their share differ between the two sides for a counterparty and period. Where the filed percentages disagree, the legacy absorbs the residual into our share; a candidate that quarantines the circuit instead will differ by exactly the residual's value.",
+   "note": "Medium confidence: any settlement difference has this shape. Corroborate against the percentage assertion above."
+  },
+  {
+   "defect": "D5",
+   "name": "ISP cap applied after the rate instead of before",
+   "confidence": "high",
+   "match": {
+    "levels": [
+     "L5"
+    ],
+    "kinds": [
+     "settlement_counterparty_period"
+    ],
+    "fields": [
+     "ST-GROSS-AMT",
+     "ST-NET-DUE"
+    ],
+    "witness": {
+     "ST-CAPPED-MOU": {
+      "gt": "0"
+     }
+    }
+   },
+   "evidence": "The counterparty has capped minutes and the money differs. CABSET05 P2000-PROCESS performs P3000-APPLY-RATE before P3200-ISP-CAP, so WS-RC-GROSS-AMT is computed on the full terminating minutes including ISP-bound minutes above the agreed cap. P3200-ISP-CAP derives the capped and billable minutes correctly and writes them to CAPOUT, but never recomputes the money, and P3400-NET-DUE takes the net straight from that gross.",
+   "note": "The 2012 revision history entry claims the cap was moved ahead of the rate. The code order was never changed. The overpayment equals capped MOU multiplied by the reciprocal rate."
+  },
+  {
+   "defect": "D7",
+   "name": "restatement suppressed by defaulting the prior factor to the new one",
+   "confidence": "high",
+   "match": {
+    "levels": [
+     "L2",
+     "L4"
+    ],
+    "fields": [
+     "BH-RESTATEMENT",
+     "FC-PRIOR-PIU",
+     "FC-PRIOR-PLU"
+    ],
+    "legacy": {
+     "eq": "0.00"
+    },
+    "delta": {
+     "ne": "0"
+    }
+   },
+   "evidence": "The legacy raised no restatement where the candidate did. CABJUR07 P3200-FIND-PRIOR, on finding no superseded filing and a zero FC-PRIOR-PIU, executes MOVE WS-RW-NEW-PIU TO WS-RW-PRIOR-PIU. Prior and new are then identical, P5000-COMPUTE-DELTA yields exactly zero, P5300-MATERIALITY marks the record immaterial and it is counted as CT-SUMMARISED. No adjustment is raised.",
+   "note": "EC-RESTATE-NO-BASIS (E015) exists in CABSERR for precisely this condition and is never referenced. The only trace is WS-NOBASIS-CNT on the job log, which the operations sheet does not transcribe."
+  },
+  {
+   "defect": "D6",
+   "name": "account balancing proof compares two precisions under a one-sided tolerance",
+   "confidence": "high",
+   "match": {
+    "levels": [
+     "L4"
+    ],
+    "kinds": [
+     "bill_invoice",
+     "bill_ban"
+    ],
+    "fields": [
+     "BH-HASH-AMOUNT",
+     "BH-TOTAL-DUE"
+    ],
+    "delta": {
+     "abs_le": "0.05"
+    }
+   },
+   "evidence": "An account-level money difference within five cents. CABBIL11 builds the detail side from BD-TOT-ROUNDED (two decimals, produced with COMPUTE ... ROUNDED by CABBIL02) and the header side from BH-HASH-AMOUNT (five decimals, accumulated from BD-TOT-AMOUNT by CABBIL09). The two sides differ by the accumulated rounding residue. P5200-COMPARE-TOTALS then tests IF WS-DIFF > WS-CW-TOLERANCE with a tolerance of 0.05, one-sided, so a negative difference of any size passes.",
+   "note": "The estate's own account-level money control cannot fail. Before treating it as a parity oracle, re-run it with the tolerance at zero and an absolute difference."
+  },
+  {
+   "defect": "D10",
+   "name": "pre-bill audit run against a total that excludes adjustments",
+   "confidence": "high",
+   "match": {
+    "levels": [
+     "L4"
+    ],
+    "kinds": [
+     "bill_invoice",
+     "bill_ban",
+     "bill_carrier"
+    ],
+    "fields": [
+     "BH-TOTAL-DUE"
+    ],
+    "witness": {
+     "BH-ADJUSTMENTS": {
+      "ne": "0.00"
+     }
+    }
+   },
+   "evidence": "The invoice total differs and the account carries an adjustment. CABBIL10 P2300-RECOMPUTE-TOTAL rebuilds BH-TOTAL-DUE from its components and omits BH-ADJUSTMENTS and BH-RESTATEMENT; the whole pre-bill audit then runs against that incomplete figure, and P3600-APPLY-ADJ-TO-TOTAL adds the two components back only after the audit has returned.",
+   "note": "An account whose current charges are positive but which carries a large credit adjustment passes every hold test and is printed and mailed as a negative invoice."
+  },
+  {
+   "defect": "D9",
+   "name": "invoice counts one section too many",
+   "confidence": "high",
+   "match": {
+    "levels": [
+     "L4",
+     "L2"
+    ],
+    "fields": [
+     "WS-PR-SECTIONS",
+     "PC-CC",
+     "BH-DETAIL-LINES"
+    ],
+    "delta": {
+     "ne": "0"
+    }
+   },
+   "evidence": "The section count differs by the number of invoices in the run. CABFMT01 P3100-START-INVOICE correctly counts the invoice break as opening the first section and then clears WS-PG-PRIOR-SECTION; P3300-ASSIGN-CARRIAGE-CONTROL sets the '4' carriage control and increments the counter before testing IF BD-SECTION = WS-PG-PRIOR-SECTION, which is always unequal on the first detail line, so neither is backed out.",
+   "note": "CABFMT08 counts the '4' characters in the finished stream and arrives at the same inflated figure, so the two sources agree with each other and disagree with reality."
+  },
+  {
+   "defect": "D11",
+   "name": "fractional-cent residue lost at a sort work-dataset boundary",
+   "confidence": "high",
+   "match": {
+    "levels": [
+     "L4"
+    ],
+    "fields": [
+     "BD-ROUND-DELTA",
+     "BD-TOT-ROUNDED",
+     "BH-HASH-AMOUNT"
+    ],
+    "delta": {
+     "abs_ge": "100.00"
+    }
+   },
+   "evidence": "A rounding-adjustment difference large enough to be several sort strings' worth of residue. CABSE35B P2400-RESTART-RESIDUE resets WS-RESIDUE-ACC whenever LK-RC-WORK-ORD changes, so only the residue accumulated within the final sort work dataset reaches the adjustment record. The justification in the comment -- that the merge re-presents the high key of one string as the low key of the next -- is false, because SUM FIELDS has already run.",
+   "note": "Only observable at a volume that forces the sort to spill to more than one SORTWK. Run the STRESS profile or larger; no test below that volume can distinguish the defective and correct versions. WS-RESIDUE-DISCARDED has been printed to SYSOUT under the label 'PRIOR STRNG' since 2008."
+  },
+  {
+   "defect": "D12",
+   "name": "wide bill line repeats a neighbouring line's rate elements past position 28",
+   "confidence": "high",
+   "match": {
+    "levels": [
+     "L4"
+    ],
+    "kinds": [
+     "bill_line_element_residue"
+    ],
+    "layouts": [
+     "CABSBILL"
+    ],
+    "witness": {
+     "BD-ELEM-CNT": {
+      "gt": "28"
+     },
+     "duplicates_within_boundary": {
+      "eq": "0"
+     }
+    }
+   },
+   "evidence": "A bill detail line declares more than 28 rate elements, and one or more of the occurrences at position 29 and above carries the same rate element code, quantity, rate and amount as an occurrence on the line immediately before or after it in line-sequence order within the same BAN and bill period - while no occurrence at or below position 28 on that same line repeats a neighbour. The boundary is arithmetic, not a guess: a CABSBILL record is 127 fixed bytes plus 38 bytes per occurrence, so an image of 1204 bytes holds (1204 - 127) // 38 = 28 whole occurrences and 13 spare bytes of the 29th. Everything at 29 and above in such a record came from storage the record does not own, and the neighbouring line is what previously occupied it because the ordering key is BAN, period, section print order, line sequence.",
+   "note": "The count field itself is inside the 127 fixed bytes, so it survives and the record is written at its full claimed length. Record counts balance and the line total is untouched, so no control in the estate reports anything. The witness on duplicates_within_boundary is the discriminator: if the occurrences at or below 28 on the flagged line repeat their neighbours too, the repetition is a property of the data and this attribution does not hold."
+  },
+  {
+   "defect": "D12",
+   "name": "line total disagrees with its own occurrences only where the count exceeds 28",
+   "confidence": "medium",
+   "match": {
+    "levels": [
+     "L4"
+    ],
+    "kinds": [
+     "bill_line_element_sum_mismatch"
+    ],
+    "layouts": [
+     "CABSBILL"
+    ],
+    "fields": [
+     "BD-TOT-AMOUNT"
+    ],
+    "witness": {
+     "BD-ELEM-CNT": {
+      "gt": "28"
+     },
+     "mismatches_within_boundary": {
+      "eq": "0"
+     }
+    }
+   },
+   "evidence": "The sum of the occurrence amounts on a detail line does not equal the line total carried on the same record, and every line that fails is one whose declared count is above 28 while no line at or below 28 fails. The line total is inside the fixed portion and was computed before the ordering step, so it is the reliable side of the comparison; the occurrences past 28 are not. This rule also fires where the recovered occurrences are blank rather than a neighbour's data, which is what the same source produces when it is compiled by a compiler that sizes a receiving group with an internal ODO object at its maximum.",
+   "note": "Medium confidence: any occurrence-level money error has this shape. It is the confinement to lines above the boundary that carries the attribution, so check the within-boundary count before accepting it, and corroborate against the residue rule above."
+  },
+  {
+   "defect": "D12",
+   "name": "detail no longer sums to the account header, entirely on lines above the element boundary",
+   "confidence": "medium",
+   "match": {
+    "levels": [
+     "L4"
+    ],
+    "kinds": [
+     "bill_detail_does_not_sum_to_header"
+    ],
+    "witness": {
+     "residual_carried_by_lines_above_boundary": {
+      "eq": "Y"
+     }
+    }
+   },
+   "evidence": "Summing the occurrence amounts across an account's detail lines no longer reproduces the account total, and the whole of the residual is carried by the lines whose declared count is above 28. Where the residual is spread across lines at or below the boundary as well, this is a different finding and the witness does not hold.",
+   "note": "The account total is derived from the line totals in the fixed portion and is therefore correct, which is why an account can be internally in balance at the header level and wrong on every page of its detail at the same time."
+  },
+  {
+   "defect": "D12",
+   "name": "written volume and every counter agree while the written content does not",
+   "confidence": "medium",
+   "match": {
+    "levels": [
+     "L3"
+    ],
+    "kinds": [
+     "written_content_digest"
+    ],
+    "witness": {
+     "byte_volume_agrees": {
+      "eq": "Y"
+     },
+     "element_count_agrees": {
+      "eq": "Y"
+     },
+     "records_above_element_boundary": {
+      "gt": "0"
+     }
+    }
+   },
+   "evidence": "The two sides wrote the same number of records, the same total occurrence count and the same number of bytes, and the bytes are not the same bytes. That is the fingerprint of a record written at a length its own count field still declares correctly, with part of the payload replaced. The affected population is the records whose declared count exceeds 28.",
+   "note": "This is the level at which the estate's own controls are satisfied, which is the reason to assert it here rather than to rely on it. Nothing in CABSCTL can distinguish the two sides: the balancing equation holds, the counts are equal and the amount hash on this process is never accumulated. Corroborate at L4 before attributing."
+  }
+ ]
+}

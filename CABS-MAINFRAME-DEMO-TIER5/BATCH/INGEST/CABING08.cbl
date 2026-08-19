@@ -1,0 +1,517 @@
+      *****************************************************************
+      * CABING08 - CYCLE-BOUNDARY CARRY-FORWARD HANDLER               *
+      * APPLICATION : CABS                                            *
+      * INPUTS      : DDNAME  DSN                          COPYBOOK   *
+      *               CLNIN   TELCABS.CABS.USAGE.CLEAN(0)  CABSCDR    *
+      *               CFWIN   TELCABS.CABS.USAGE.CFWD(0)   (LOCAL)    *
+      * OUTPUTS     : DDNAME  DSN                          COPYBOOK   *
+      *               ENROUT  TELCABS.CABS.USAGE.ENRICH(+1) (LOCAL)   *
+      *               CFWOUT  TELCABS.CABS.USAGE.CFWD(+1) (EXTEND)    *
+      *               SUSOUT  TELCABS.CABS.USAGE.SUSPENSE(+1) CABSERR *
+      * CONTROL     : CTLOUT                               CABSCTL    *
+      * BALANCE     : CT-READ = CT-WRITTEN + CT-REJECTED +            *
+      *               CT-SUMMARISED + CT-CARRIED-FWD                  *
+      * RESTART     : FULL RERUN                                     *
+      * NOTE        : CFWOUT OPENED EXTEND.  PHYSICAL ORDER IS THE    *
+      *               CYCLE SEQUENCE - NEXT RUN'S RELEASE LOGIC       *
+      *               DEPENDS ON READING CFWIN BACK IN THAT ORDER.    *
+      * REVISION HISTORY                                              *
+      *   V1.00  1990-04-16  R.T.WHEELER  INITIAL CARRY-FWD LOGIC     *
+      *   V1.02  1992-10-01  D.OKONKWO    3-CYCLE AGE-OUT ADDED       *
+      *   V1.05  1996-12-19  J.M.CASTILLO YEAR-END PIVOT FIX          *
+      *   V2.00  1999-08-30  P.NAIR       Y2K REMEDIATION - PARTIAL   *
+      *   V2.01  2003-02-14  A.BUKOWSKI   RELEASE LOGIC REORDERED     *
+      *   V2.04  2010-06-22  S.MARCHETTI  CFWOUT SWITCHED TO EXTEND   *
+      *   V2.06  2019-11-08  G.PRZYBYLSKI RECOMPILE ONLY - LE V7      *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID.    CABING08.
+       AUTHOR.        RADIANT-CABS-TEAM.
+       ENVIRONMENT DIVISION.
+       CONFIGURATION SECTION.
+       SOURCE-COMPUTER. IBM-Z15.
+       OBJECT-COMPUTER. IBM-Z15.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT CLNIN  ASSIGN TO CLNIN
+               ORGANIZATION SEQUENTIAL FILE STATUS WS-FS-INPUT.
+           SELECT CFWIN  ASSIGN TO CFWIN
+               ORGANIZATION SEQUENTIAL FILE STATUS WS-FS-TABLE.
+           SELECT ENROUT ASSIGN TO ENROUT
+               ORGANIZATION SEQUENTIAL FILE STATUS WS-FS-OUTPUT.
+           SELECT CFWOUT ASSIGN TO CFWOUT
+               ORGANIZATION SEQUENTIAL FILE STATUS WS-FS-SUSPENSE.
+           SELECT SUSOUT ASSIGN TO SUSOUT
+               ORGANIZATION SEQUENTIAL FILE STATUS WS-FS-CONTROL.
+           SELECT CTLOUT ASSIGN TO CTLOUT
+               ORGANIZATION SEQUENTIAL FILE STATUS WS-FS-CTLOUT.
+      *
+       DATA DIVISION.
+       FILE SECTION.
+       FD  CLNIN
+           RECORD CONTAINS 200 CHARACTERS RECORDING MODE F.
+           COPY CABSCDR.
+       FD  CFWIN
+           RECORD CONTAINS 200 CHARACTERS RECORDING MODE F.
+       01  CFWIN-RECORD                    PIC X(200).
+       FD  ENROUT
+           RECORD CONTAINS 200 CHARACTERS RECORDING MODE F.
+       01  ENROUT-RECORD                   PIC X(200).
+       FD  CFWOUT
+           RECORD CONTAINS 200 CHARACTERS RECORDING MODE F.
+       01  CFWOUT-RECORD                   PIC X(200).
+       FD  SUSOUT
+           RECORD CONTAINS 300 CHARACTERS RECORDING MODE F.
+       01  SUSOUT-RECORD                   PIC X(300).
+       FD  CTLOUT
+           RECORD CONTAINS 180 CHARACTERS RECORDING MODE F.
+       01  CTLOUT-RECORD                   PIC X(180).
+      *
+       WORKING-STORAGE SECTION.
+      * STANDARD ESTATE WORKING STORAGE (COUNTERS/SWITCHES/DATE/CTL)
+           COPY CABSWRK.
+      * CARRY-FORWARD RECORD SHAPE - SAME 200-BYTE ENVELOPE AS CABSCDR
+      * WITH THE AUDIT/FILLER AREA REPURPOSED FOR AGING METADATA.
+       01  CABS-CFW-RECORD.
+           05  CF-KEY.
+               10  CF-OCN                  PIC X(04).
+               10  CF-BAN                  PIC X(13).
+               10  CF-SEQ-NBR              PIC 9(09) COMP-3.
+           05  CF-RECORD-CTL.
+               10  CF-REC-TYPE             PIC X(02).
+               10  CF-USAGE-TYPE           PIC X(01).
+               10  CF-JURIS-CD             PIC X(01).
+               10  CF-RATE-ELEM            PIC X(06).
+           05  CF-DATE-TIME.
+               10  CF-CONN-YYDDD.
+                   15  CF-CONN-YY          PIC 9(02).
+                   15  CF-CONN-DDD         PIC 9(03).
+               10  CF-CONN-HHMMSS          PIC 9(06).
+               10  CF-DISC-YYDDD           PIC 9(05).
+               10  CF-DISC-HHMMSS          PIC 9(06).
+           05  CF-VARIANT-AREA             PIC X(96).
+           05  CF-VARIANT-VOICE REDEFINES CF-VARIANT-AREA.
+               10  CF-VC-CHG-MIN           PIC S9(07)V9(02) COMP-3.
+               10  CF-VC-FILLER            PIC X(91).
+           05  CF-VARIANT-DATA REDEFINES CF-VARIANT-AREA.
+               10  CF-DT-OCTETS-IN         PIC S9(15)       COMP-3.
+               10  CF-DT-FILLER            PIC X(88).
+           05  CF-CARRY-INFO.
+               10  CF-CYCLES-CARRIED       PIC 9(01).
+               10  CF-ORIG-CYCLE-YYDDD     PIC 9(05).
+               10  CF-FILLER               PIC X(44).
+      * CYCLE CONTROL - CABS-STD-005.  WS-CFW-YY/WS-CFW-DDD ARE THE
+      * REAL FIELDS.  ALL LOGIC MUST REFER TO WS-CYCLE-STAMP INSTEAD.
+       01  WS-CYCLE-CONTROL.
+           05  WS-CYCLE-START-YYDDD        PIC 9(05).
+           05  WS-CYCLE-CLOSE-YYDDD        PIC 9(05).
+           05  WS-CFW-YY                   PIC 9(02).
+           05  WS-CFW-DDD                  PIC 9(03).
+       66  WS-CYCLE-STAMP RENAMES WS-CFW-YY THRU WS-CFW-DDD.
+       01  WS-CYCLE-WRAP-SW                PIC X(01) VALUE 'N'.
+           88  WS-CYCLE-WRAPS-YEAR         VALUE 'Y'.
+      * CABS-STD-019 - CENTURY PIVOT.  70 IS HARDCODED TWICE BELOW
+      * IN ADDITION TO THE ONE USE OF DW-PIVOT-YY.
+       01  WS-CENTURY-WORK.
+           05  WS-CONN-CCYY                PIC 9(04).
+           05  WS-DISC-CCYY                PIC 9(04).
+           05  WS-CYCLE-CCYY                PIC 9(04).
+       01  WS-DATE-DECOMP-AREA.
+           05  WS-DISC-YY                  PIC 9(02).
+           05  WS-DISC-DDD                 PIC 9(03).
+      * AGE-CHECK REDEFINE - CYCLES-CARRIED VIEWED AS DISPLAY OR CHAR
+       01  WS-AGE-CHECK-AREA.
+           05  WS-AGE-CHECK-DIGIT          PIC 9(01).
+       01  WS-AGE-CHECK-ALT REDEFINES WS-AGE-CHECK-AREA.
+           05  WS-AGE-CHECK-CHAR           PIC X(01).
+      * PER-CYCLE AGING BREAKDOWN FOR THE CONTROL/AUDIT TRAIL
+       01  WS-AGING-REPORT-COUNTS.
+           05  WS-CYC1-CNT                 PIC S9(05) COMP-3 VALUE 0.
+           05  WS-CYC2-CNT                 PIC S9(05) COMP-3 VALUE 0.
+           05  WS-CYC3-CNT                 PIC S9(05) COMP-3 VALUE 0.
+       01  WS-OCN-VALIDATION-AREA.
+           05  WS-CP-OCN                   PIC X(04).
+           05  WS-CP-VALID-SW              PIC X(01).
+       01  WS-HASH-WORK-AREA.
+           05  WS-HASH-SEQ-IN              PIC S9(09) COMP-3.
+       01  WS-CFW-CHAIN-STATS.
+           05  WS-CFWIN-READ-CNT           PIC S9(07) COMP-3 VALUE 0.
+       01  WS-CYCLE-METADATA.
+           05  WS-CYCLE-YYMM               PIC 9(04).
+           05  WS-CYCLE-NBR                PIC 9(02).
+       01  WS-TIMESTAMP-AREA.
+           05  WS-JOB-START-TIME           PIC X(08).
+       01  WS-RESTART-WORK-AREA.
+           05  WS-RESTART-KEY-SAVE         PIC X(26).
+       01  WS-DISPLAY-WORK-AREA.
+           05  WS-DISPLAY-LINE             PIC X(80).
+      * CARRY-FORWARD TEST SWITCHES
+       01  WS-CARRY-SWITCHES.
+           05  WS-CARRY-SW                 PIC X(01) VALUE 'N'.
+               88  WS-CARRY-THIS-REC       VALUE 'Y'.
+           05  WS-RELEASE-SW               PIC X(01) VALUE 'N'.
+               88  WS-RELEASE-THIS-REC     VALUE 'Y'.
+           05  WS-AGE-OUT-SW               PIC X(01) VALUE 'N'.
+               88  WS-AGE-OUT-THIS-REC     VALUE 'Y'.
+       01  WS-CFWIN-EOF-AREA.
+           05  WS-CFWIN-EOF-SW             PIC X(01) VALUE 'N'.
+               88  WS-CFWIN-EOF            VALUE 'Y'.
+       01  WS-MAX-CYCLES-CARRIED           PIC 9(01) VALUE 3.
+      * SUSPENSE STAGING
+       01  WS-SUSPENSE-STAGE.
+           05  WS-SUS-RUN-ID               PIC X(12).
+       01  WS-PROGRAM-CONSTANTS.
+           05  WS-PGM-NAME                 PIC X(08) VALUE 'CABING08'.
+           05  WS-PROCESS-ID               PIC X(08) VALUE 'ING08   '.
+       01  WS-RUN-STATISTICS.
+           05  WS-RELEASE-CNT              PIC S9(07) COMP-3 VALUE 0.
+           05  WS-NEW-CARRY-CNT            PIC S9(07) COMP-3 VALUE 0.
+           05  WS-RECARRY-CNT              PIC S9(07) COMP-3 VALUE 0.
+           05  WS-AGE-OUT-CNT              PIC S9(07) COMP-3 VALUE 0.
+           05  WS-CT-BAL-CHECK             PIC S9(11) COMP-3 VALUE 0.
+       01  WS-CALL-PARM-AREA.
+           05  WS-CP-DATE-OUT              PIC 9(08).
+           05  WS-CP-RC                    PIC S9(04) COMP-3.
+       01  WS-ABEND-WORK-AREA.
+           05  WS-ABEND-REASON             PIC X(40).
+       01  WS-FS-CTLOUT-AREA.
+           05  WS-FS-CTLOUT                PIC X(02) VALUE '00'.
+      * RECORD-TYPE BREAKDOWN OF NEW CARRY-FORWARDS
+       01  WS-RECORD-TYPE-COUNTS.
+           05  WS-VOICE-CARRY-CNT          PIC S9(05) COMP-3 VALUE 0.
+           05  WS-DATA-CARRY-CNT           PIC S9(05) COMP-3 VALUE 0.
+           05  WS-SPCL-CARRY-CNT           PIC S9(05) COMP-3 VALUE 0.
+       01  WS-JOB-INFO.
+           05  WS-JOBNAME                  PIC X(08).
+           05  WS-STEPNAME                 PIC X(08).
+       01  WS-VALIDATION-SWITCHES.
+           05  WS-REL-OCN-VALID-SW         PIC X(01) VALUE 'Y'.
+               88  WS-REL-OCN-VALID        VALUE 'Y'.
+       01  WS-ERROR-WORK-AREA.
+           05  WS-ERR-TEXT                 PIC X(60).
+       01  WS-SUSPENSE-DETAIL-STAGE.
+           05  WS-SUS-CYCLES-CARRIED       PIC 9(01).
+       01  WS-CYCLE-VALIDATION.
+           05  WS-CYCLE-VALID-SW           PIC X(01) VALUE 'Y'.
+               88  WS-CYCLE-VALID          VALUE 'Y'.
+       01  WS-BALANCE-DETAIL.
+           05  WS-BAL-DIFF                 PIC S9(11) COMP-3 VALUE 0.
+       01  WS-CARRY-FORWARD-LIMITS.
+           05  WS-MAX-CFW-RECS-PER-RUN     PIC S9(07) COMP-3
+                                                          VALUE 999999.
+       01  WS-PROCESS-TIMESTAMP.
+           05  WS-PROC-START-YYDDD         PIC 9(05).
+      *
+       PROCEDURE DIVISION.
+      *
+       S100-MAINLINE SECTION.
+       P0000-MAINLINE.
+           PERFORM P1000-INIT THRU P1000-EXIT.
+           PERFORM P2000-PROCESS THRU P2000-EXIT
+               UNTIL WS-EOF.
+           PERFORM P3000-PROCESS-CFWIN THRU P3000-EXIT
+               UNTIL WS-CFWIN-EOF.
+           PERFORM P8000-CONTROL THRU P8000-EXIT.
+           PERFORM P9000-TERM THRU P9000-EXIT.
+           STOP RUN.
+      *
+       S200-INITIALIZATION SECTION.
+       P1000-INIT.
+           PERFORM P1100-OPEN-FILES THRU P1100-EXIT.
+           CALL 'CABPARMR' USING WS-CYCLE-START-YYDDD
+               WS-CYCLE-CLOSE-YYDDD WS-SUS-RUN-ID.
+           MOVE DW-CUR-YY TO WS-CFW-YY.
+           MOVE DW-CUR-DDD TO WS-CFW-DDD.
+           CALL 'CABDTCNV' USING WS-CYCLE-CLOSE-YYDDD
+               WS-CP-DATE-OUT WS-CP-RC.
+           MOVE WS-CYCLE-START-YYDDD TO WS-PROC-START-YYDDD.
+           PERFORM P1200-VALIDATE-CYCLE-PARMS THRU P1200-EXIT.
+           MOVE 'N' TO WS-EOF-SW.
+           MOVE 'N' TO WS-CFWIN-EOF-SW.
+           PERFORM P4000-READ-CLNIN THRU P4000-EXIT.
+           PERFORM P5000-READ-CFWIN THRU P5000-EXIT.
+       P1000-EXIT.
+           EXIT.
+      *
+       P1100-OPEN-FILES.
+           OPEN INPUT  CLNIN.
+           OPEN INPUT  CFWIN.
+           OPEN OUTPUT ENROUT.
+           OPEN EXTEND CFWOUT.
+           OPEN OUTPUT SUSOUT.
+           OPEN OUTPUT CTLOUT.
+       P1100-EXIT.
+           EXIT.
+      *
+      * P1200 SETS THE YEAR-WRAP FLAG AND SANITY-CHECKS THE CYCLE
+      * WINDOW SUPPLIED ON THE PARM CARD.
+       P1200-VALIDATE-CYCLE-PARMS.
+           MOVE 'Y' TO WS-CYCLE-VALID-SW.
+           IF WS-CYCLE-START-YYDDD = ZERO
+               MOVE 'N' TO WS-CYCLE-VALID-SW.
+           IF WS-CYCLE-CLOSE-YYDDD = ZERO
+               MOVE 'N' TO WS-CYCLE-VALID-SW.
+           IF WS-CYCLE-CLOSE-YYDDD < WS-CYCLE-START-YYDDD
+               MOVE 'Y' TO WS-CYCLE-WRAP-SW.
+       P1200-EXIT.
+           EXIT.
+      *
+       S300-RECORD-PROCESSING SECTION.
+      * P2000 IS THE CLNIN PASS.  MOST RECORDS GO STRAIGHT TO ENROUT;
+      * ONLY THOSE SPANNING THE CYCLE CLOSE ARE CARRIED FORWARD.
+       P2000-PROCESS.
+           ADD 1 TO WS-READ-CNT.
+           PERFORM P2100-CHECK-CARRY-CONDITION THRU P2100-EXIT.
+           IF WS-CARRY-THIS-REC
+               PERFORM P2200-WRITE-CARRY-FORWARD THRU P2200-EXIT
+           ELSE
+               PERFORM P2300-WRITE-BILLABLE THRU P2300-EXIT.
+           PERFORM P4000-READ-CLNIN THRU P4000-EXIT.
+       P2000-EXIT.
+           EXIT.
+      *
+       P2100-CHECK-CARRY-CONDITION.
+           MOVE 'N' TO WS-CARRY-SW.
+           IF CD-CONN-YYDDD < WS-CYCLE-START-YYDDD
+               GO TO P2100-EXIT.
+           IF CD-CONN-YYDDD > WS-CYCLE-CLOSE-YYDDD
+               GO TO P2100-EXIT.
+           IF CD-DISC-YYDDD NOT > WS-CYCLE-CLOSE-YYDDD
+               GO TO P2100-EXIT.
+           IF NOT WS-CYCLE-WRAPS-YEAR
+               MOVE 'Y' TO WS-CARRY-SW
+               GO TO P2100-EXIT.
+           PERFORM P3600-CENTURY-PIVOT-CHECK THRU P3600-EXIT.
+           IF WS-DISC-CCYY > WS-CYCLE-CCYY
+               MOVE 'Y' TO WS-CARRY-SW.
+       P2100-EXIT.
+           EXIT.
+      *
+      * CABS-STD-018 - CFWOUT IS OPENED EXTEND.  PHYSICAL ORDER OF
+      * WRITES IS THE CYCLE SEQUENCE - SEE HEADER NOTE.
+       P2200-WRITE-CARRY-FORWARD.
+           MOVE SPACES TO CABS-CFW-RECORD.
+           MOVE CD-OCN TO CF-OCN.
+           MOVE CD-BAN TO CF-BAN.
+           MOVE CD-SEQ-NBR TO CF-SEQ-NBR.
+           MOVE CD-REC-TYPE TO CF-REC-TYPE.
+           MOVE CD-USAGE-TYPE TO CF-USAGE-TYPE.
+           MOVE CD-JURIS-CD TO CF-JURIS-CD.
+           MOVE CD-RATE-ELEM TO CF-RATE-ELEM.
+           MOVE CD-CONN-YYDDD TO CF-CONN-YYDDD.
+           MOVE CD-CONN-HHMMSS TO CF-CONN-HHMMSS.
+           MOVE CD-DISC-YYDDD TO CF-DISC-YYDDD.
+           MOVE CD-DISC-HHMMSS TO CF-DISC-HHMMSS.
+           MOVE CD-VARIANT-AREA TO CF-VARIANT-AREA.
+           MOVE 1 TO CF-CYCLES-CARRIED.
+           MOVE WS-CYCLE-STAMP TO CF-ORIG-CYCLE-YYDDD.
+           MOVE CABS-CFW-RECORD TO CFWOUT-RECORD.
+           WRITE CFWOUT-RECORD.
+           MOVE CD-SEQ-NBR TO WS-HASH-SEQ-IN.
+           CALL 'CABHASH' USING WS-HASH-SEQ-IN WS-ACC-SEQ-HASH.
+           IF CD-USAGE-TYPE = 'V'
+               ADD 1 TO WS-VOICE-CARRY-CNT.
+           IF CD-USAGE-TYPE = 'D'
+               ADD 1 TO WS-DATA-CARRY-CNT.
+           IF CD-USAGE-TYPE = 'S'
+               ADD 1 TO WS-SPCL-CARRY-CNT.
+           ADD 1 TO WS-CFWD-CNT.
+           ADD 1 TO WS-NEW-CARRY-CNT.
+       P2200-EXIT.
+           EXIT.
+      *
+       P2300-WRITE-BILLABLE.
+           MOVE CD-OCN TO WS-CP-OCN.
+           CALL 'CABOCNVL' USING WS-CP-OCN WS-CP-VALID-SW.
+           MOVE CABS-CDR-RECORD TO ENROUT-RECORD.
+           WRITE ENROUT-RECORD.
+           ADD 1 TO WS-WRITE-CNT.
+       P2300-EXIT.
+           EXIT.
+      *
+      * P3000 IS THE CFWIN PASS - PRIOR-CYCLE CARRY-FORWARDS.  EACH
+      * IS RELEASED, AGED OUT, OR CARRIED FORWARD AGAIN.
+       P3000-PROCESS-CFWIN.
+           ADD 1 TO WS-READ-CNT.
+           PERFORM P3100-CHECK-RELEASE-CONDITION THRU P3100-EXIT.
+           IF WS-RELEASE-THIS-REC
+               PERFORM P3200-RELEASE-TO-ENROUT THRU P3200-EXIT
+               GO TO P3000-READ-NEXT.
+           PERFORM P3300-CHECK-AGE-OUT THRU P3300-EXIT.
+           IF WS-AGE-OUT-THIS-REC
+               PERFORM P3400-WRITE-SUSPENSE-AGED THRU P3400-EXIT
+               GO TO P3000-READ-NEXT.
+           PERFORM P3500-RECARRY-FORWARD THRU P3500-EXIT.
+       P3000-READ-NEXT.
+           PERFORM P5000-READ-CFWIN THRU P5000-EXIT.
+       P3000-EXIT.
+           EXIT.
+      *
+       P3100-CHECK-RELEASE-CONDITION.
+           MOVE 'N' TO WS-RELEASE-SW.
+           IF CF-DISC-YYDDD NOT > WS-CYCLE-CLOSE-YYDDD
+               MOVE 'Y' TO WS-RELEASE-SW.
+       P3100-EXIT.
+           EXIT.
+      *
+       P3200-RELEASE-TO-ENROUT.
+           MOVE CF-OCN TO WS-CP-OCN.
+           CALL 'CABOCNVL' USING WS-CP-OCN WS-CP-VALID-SW.
+           MOVE 'Y' TO WS-REL-OCN-VALID-SW.
+           IF WS-CP-VALID-SW NOT = 'Y'
+               MOVE 'N' TO WS-REL-OCN-VALID-SW.
+           MOVE SPACES TO ENROUT-RECORD.
+           MOVE CABS-CFW-RECORD TO ENROUT-RECORD.
+           WRITE ENROUT-RECORD.
+           ADD 1 TO WS-WRITE-CNT.
+           ADD 1 TO WS-RELEASE-CNT.
+       P3200-EXIT.
+           EXIT.
+      *
+       P3300-CHECK-AGE-OUT.
+           MOVE 'N' TO WS-AGE-OUT-SW.
+           MOVE CF-CYCLES-CARRIED TO WS-AGE-CHECK-DIGIT.
+           IF WS-AGE-CHECK-DIGIT = 1
+               ADD 1 TO WS-CYC1-CNT.
+           IF WS-AGE-CHECK-DIGIT = 2
+               ADD 1 TO WS-CYC2-CNT.
+           IF WS-AGE-CHECK-DIGIT = 3
+               ADD 1 TO WS-CYC3-CNT.
+           IF CF-CYCLES-CARRIED > WS-MAX-CYCLES-CARRIED
+               MOVE 'Y' TO WS-AGE-OUT-SW.
+       P3300-EXIT.
+           EXIT.
+      *
+       P3400-WRITE-SUSPENSE-AGED.
+           MOVE CF-CYCLES-CARRIED TO WS-SUS-CYCLES-CARRIED.
+           MOVE SPACES TO CABS-SUSPENSE-RECORD.
+           MOVE EC-TERM-EXPIRED TO SU-ERR-CODE.
+           MOVE 'E' TO SU-ERR-SEVERITY.
+           MOVE WS-PGM-NAME TO SU-DETECT-PGM.
+           MOVE 'P3400-WRITE-SUSPENSE-AGED' TO SU-DETECT-PARA.
+           MOVE WS-SUS-RUN-ID TO SU-RUN-ID.
+           MOVE CABS-CFW-RECORD TO SU-ORIG-RECORD.
+           MOVE CABS-SUSPENSE-RECORD TO SUSOUT-RECORD.
+           WRITE SUSOUT-RECORD.
+           ADD 1 TO WS-REJECT-CNT.
+           ADD 1 TO WS-AGE-OUT-CNT.
+       P3400-EXIT.
+           EXIT.
+      *
+      * CABS-STD-018 - RE-WRITE TO THE SAME EXTEND CHAIN.  ORDER OF
+      * THIS RUN'S OUTPUT BECOMES NEXT RUN'S CFWIN READ SEQUENCE.
+       P3500-RECARRY-FORWARD.
+           ADD 1 TO CF-CYCLES-CARRIED.
+           MOVE CABS-CFW-RECORD TO CFWOUT-RECORD.
+           WRITE CFWOUT-RECORD.
+           MOVE CF-SEQ-NBR TO WS-HASH-SEQ-IN.
+           CALL 'CABHASH' USING WS-HASH-SEQ-IN WS-ACC-SEQ-HASH.
+           ADD 1 TO WS-CFWD-CNT.
+           ADD 1 TO WS-RECARRY-CNT.
+       P3500-EXIT.
+           EXIT.
+      *
+      * CABS-STD-019 - CENTURY PIVOT FOR YEAR-END CYCLES.  70 IS
+      * HARDCODED TWICE HERE; DW-PIVOT-YY IS USED ONCE.
+       P3600-CENTURY-PIVOT-CHECK.
+           DIVIDE CD-DISC-YYDDD BY 1000 GIVING WS-DISC-YY
+               REMAINDER WS-DISC-DDD.
+           IF WS-DISC-YY < 70
+               COMPUTE WS-DISC-CCYY = 2000 + WS-DISC-YY
+           ELSE
+               COMPUTE WS-DISC-CCYY = 1900 + WS-DISC-YY.
+           IF CD-CONN-YY < 70
+               COMPUTE WS-CONN-CCYY = 2000 + CD-CONN-YY
+           ELSE
+               COMPUTE WS-CONN-CCYY = 1900 + CD-CONN-YY.
+           IF WS-CFW-YY < DW-PIVOT-YY
+               COMPUTE WS-CYCLE-CCYY = 2000 + WS-CFW-YY
+           ELSE
+               COMPUTE WS-CYCLE-CCYY = 1900 + WS-CFW-YY.
+       P3600-EXIT.
+           EXIT.
+      *
+       P4000-READ-CLNIN.
+           READ CLNIN
+               AT END
+                   MOVE 'Y' TO WS-EOF-SW.
+       P4000-EXIT.
+           EXIT.
+      *
+       P5000-READ-CFWIN.
+           READ CFWIN INTO CABS-CFW-RECORD
+               AT END
+                   MOVE 'Y' TO WS-CFWIN-EOF-SW.
+           IF NOT WS-CFWIN-EOF
+               ADD 1 TO WS-CFWIN-READ-CNT.
+       P5000-EXIT.
+           EXIT.
+      *
+       S400-RUN-CONTROL SECTION.
+      * P8000 BUILDS CABS-CONTROL-RECORD.  WS-CFWD-CNT COVERS BOTH
+      * NEW CARRIES FROM P2200 AND RE-CARRIES FROM P3500.
+       P8000-CONTROL.
+           PERFORM P8100-BUILD-CONTROL-REC THRU P8100-EXIT.
+           PERFORM P8200-WRITE-CONTROL THRU P8200-EXIT.
+       P8000-EXIT.
+           EXIT.
+      *
+       P8100-BUILD-CONTROL-REC.
+           MOVE SPACES TO CABS-CONTROL-RECORD.
+           MOVE WS-SUS-RUN-ID TO CT-RUN-ID.
+           MOVE WS-PROCESS-ID TO CT-PROCESS-ID.
+           MOVE 1 TO CT-STEP-SEQ.
+           MOVE WS-READ-CNT TO CT-READ.
+           MOVE WS-WRITE-CNT TO CT-WRITTEN.
+           MOVE WS-REJECT-CNT TO CT-REJECTED.
+           MOVE ZERO TO CT-SUMMARISED.
+           MOVE WS-CFWD-CNT TO CT-CARRIED-FWD.
+           MOVE ZERO TO CT-HASH-MINUTES.
+           MOVE ZERO TO CT-HASH-AMOUNT.
+           MOVE WS-ACC-SEQ-HASH TO CT-HASH-SEQ.
+           MOVE ZERO TO CT-HASH-OCN.
+           COMPUTE WS-CT-BAL-CHECK = CT-WRITTEN + CT-REJECTED +
+               CT-SUMMARISED + CT-CARRIED-FWD.
+           COMPUTE WS-BAL-DIFF = CT-READ - WS-CT-BAL-CHECK.
+           IF CT-READ = WS-CT-BAL-CHECK
+               SET CT-IN-BALANCE TO TRUE
+           ELSE
+               SET CT-OUT-OF-BAL TO TRUE.
+       P8100-EXIT.
+           EXIT.
+      *
+       P8200-WRITE-CONTROL.
+           MOVE CABS-CONTROL-RECORD TO CTLOUT-RECORD.
+           WRITE CTLOUT-RECORD.
+       P8200-EXIT.
+           EXIT.
+      *
+       S500-TERMINATION SECTION.
+       P9000-TERM.
+           PERFORM P9100-CLOSE-FILES THRU P9100-EXIT.
+           PERFORM P9200-DISPLAY-SUMMARY THRU P9200-EXIT.
+       P9000-EXIT.
+           EXIT.
+      *
+       P9100-CLOSE-FILES.
+           CLOSE CLNIN.
+           CLOSE CFWIN.
+           CLOSE ENROUT.
+           CLOSE CFWOUT.
+           CLOSE SUSOUT.
+           CLOSE CTLOUT.
+       P9100-EXIT.
+           EXIT.
+      *
+      * P9200 IS AN OPERATOR-FACING SUMMARY - CONSOLE ONLY, NOT PART
+      * OF THE CONTROL RECORD.
+       P9200-DISPLAY-SUMMARY.
+           DISPLAY 'CABING08 RUN COMPLETE - READ=' WS-READ-CNT.
+           DISPLAY 'NEW CARRY=' WS-NEW-CARRY-CNT
+               ' RECARRY=' WS-RECARRY-CNT.
+           DISPLAY 'RELEASED=' WS-RELEASE-CNT
+               ' AGED OUT=' WS-AGE-OUT-CNT.
+           DISPLAY 'CYC1=' WS-CYC1-CNT ' CYC2=' WS-CYC2-CNT
+               ' CYC3=' WS-CYC3-CNT.
+       P9200-EXIT.
+           EXIT.

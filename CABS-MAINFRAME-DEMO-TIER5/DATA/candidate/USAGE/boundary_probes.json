@@ -1,0 +1,443 @@
+[
+ {
+  "day": "2024-09-29",
+  "ocn": "5645",
+  "ban": "203M537611246",
+  "seq": 2,
+  "rate_elem": "TERMAC",
+  "boundary_qty": "2500000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "3694",
+  "ban": "210C556731824",
+  "seq": 15,
+  "rate_elem": "ORIGAC",
+  "boundary_qty": "250000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "4852",
+  "ban": "636L193721847",
+  "seq": 10,
+  "rate_elem": "ORIGAC",
+  "boundary_qty": "5000000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "J279",
+  "ban": "225D966999953",
+  "seq": 11,
+  "rate_elem": "TANSW",
+  "boundary_qty": "100000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "7145",
+  "ban": "334G985701353",
+  "seq": 23,
+  "rate_elem": "TANSW",
+  "boundary_qty": "50000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "3656",
+  "ban": "713N732956701",
+  "seq": 38,
+  "rate_elem": "TERMAC",
+  "boundary_qty": "50000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "7822",
+  "ban": "845N467823555",
+  "seq": 59,
+  "rate_elem": "ORIGAC",
+  "boundary_qty": "500000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "7759",
+  "ban": "734L907005788",
+  "seq": 52,
+  "rate_elem": "ORIGAC",
+  "boundary_qty": "100000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "8119",
+  "ban": "203A023015483",
+  "seq": 52,
+  "rate_elem": "ORIGAC",
+  "boundary_qty": "500000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "1318",
+  "ban": "309L490928724",
+  "seq": 47,
+  "rate_elem": "TERMAC",
+  "boundary_qty": "50000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "0211",
+  "ban": "336N852397913",
+  "seq": 49,
+  "rate_elem": "ORIGAC",
+  "boundary_qty": "1000000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "2111",
+  "ban": "785C646996627",
+  "seq": 66,
+  "rate_elem": "TANSW",
+  "boundary_qty": "5000000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "5401",
+  "ban": "781E904717436",
+  "seq": 62,
+  "rate_elem": "TERMAC",
+  "boundary_qty": "2500000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "9059",
+  "ban": "731K665019267",
+  "seq": 54,
+  "rate_elem": "TERMAC",
+  "boundary_qty": "250000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "5846",
+  "ban": "530F655074784",
+  "seq": 6,
+  "rate_elem": "TANSW",
+  "boundary_qty": "2500000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "2488",
+  "ban": "316H473604037",
+  "seq": 87,
+  "rate_elem": "TANSW",
+  "boundary_qty": "250000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "9054",
+  "ban": "585P887327098",
+  "seq": 76,
+  "rate_elem": "TANSW",
+  "boundary_qty": "100000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "8578",
+  "ban": "580D521177571",
+  "seq": 102,
+  "rate_elem": "TERMAC",
+  "boundary_qty": "5000000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "4061",
+  "ban": "715N583874730",
+  "seq": 12,
+  "rate_elem": "TANSW",
+  "boundary_qty": "5000000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "5788",
+  "ban": "732P686267475",
+  "seq": 107,
+  "rate_elem": "TANSW",
+  "boundary_qty": "250000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "2102",
+  "ban": "580G676496334",
+  "seq": 129,
+  "rate_elem": "TANSW",
+  "boundary_qty": "250000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "4971",
+  "ban": "312H544652233",
+  "seq": 154,
+  "rate_elem": "TANSW",
+  "boundary_qty": "1000000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "5750",
+  "ban": "404B129461754",
+  "seq": 144,
+  "rate_elem": "ORIGAC",
+  "boundary_qty": "50000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "Z935",
+  "ban": "859L531699925",
+  "seq": 136,
+  "rate_elem": "ORIGAC",
+  "boundary_qty": "5000000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "K188",
+  "ban": "865K930847707",
+  "seq": 162,
+  "rate_elem": "TANSW",
+  "boundary_qty": "1000000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-29",
+  "ocn": "4070",
+  "ban": "708J094535137",
+  "seq": 156,
+  "rate_elem": "TERMAC",
+  "boundary_qty": "5000000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "6042",
+  "ban": "814A559510883",
+  "seq": 10,
+  "rate_elem": "ORIGAC",
+  "boundary_qty": "100000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "6620",
+  "ban": "615C404237668",
+  "seq": 7,
+  "rate_elem": "TANSW",
+  "boundary_qty": "100000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "N160",
+  "ban": "404P077066160",
+  "seq": 19,
+  "rate_elem": "TERMAC",
+  "boundary_qty": "250000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "9373",
+  "ban": "817M739726367",
+  "seq": 27,
+  "rate_elem": "TERMAC",
+  "boundary_qty": "2500000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "W234",
+  "ban": "410H589218789",
+  "seq": 25,
+  "rate_elem": "TANSW",
+  "boundary_qty": "50000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "W234",
+  "ban": "410H589218789",
+  "seq": 40,
+  "rate_elem": "ORIGAC",
+  "boundary_qty": "2500000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "E571",
+  "ban": "405A720058219",
+  "seq": 51,
+  "rate_elem": "TANSW",
+  "boundary_qty": "1000000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "7707",
+  "ban": "213C365038606",
+  "seq": 51,
+  "rate_elem": "ORIGAC",
+  "boundary_qty": "5000000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "H154",
+  "ban": "330H169330348",
+  "seq": 5,
+  "rate_elem": "ORIGAC",
+  "boundary_qty": "250000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "A300",
+  "ban": "316N267846418",
+  "seq": 52,
+  "rate_elem": "ORIGAC",
+  "boundary_qty": "2500000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "X283",
+  "ban": "816E923540869",
+  "seq": 107,
+  "rate_elem": "ORIGAC",
+  "boundary_qty": "250000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "0469",
+  "ban": "251A634592492",
+  "seq": 97,
+  "rate_elem": "TANSW",
+  "boundary_qty": "250000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "0474",
+  "ban": "971E625203087",
+  "seq": 114,
+  "rate_elem": "TERMAC",
+  "boundary_qty": "5000000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "6405",
+  "ban": "614K164285284",
+  "seq": 141,
+  "rate_elem": "ORIGAC",
+  "boundary_qty": "500000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "8744",
+  "ban": "931G506276941",
+  "seq": 124,
+  "rate_elem": "ORIGAC",
+  "boundary_qty": "2500000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "2099",
+  "ban": "252F316877433",
+  "seq": 123,
+  "rate_elem": "ORIGAC",
+  "boundary_qty": "1000000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "N160",
+  "ban": "404D120743548",
+  "seq": 119,
+  "rate_elem": "ORIGAC",
+  "boundary_qty": "50000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "7822",
+  "ban": "845G152314437",
+  "seq": 116,
+  "rate_elem": "TERMAC",
+  "boundary_qty": "250000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "7502",
+  "ban": "248A503354396",
+  "seq": 128,
+  "rate_elem": "TERMAC",
+  "boundary_qty": "5000000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "M892",
+  "ban": "320A216316187",
+  "seq": 153,
+  "rate_elem": "TERMAC",
+  "boundary_qty": "1000000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "4465",
+  "ban": "919H822201515",
+  "seq": 164,
+  "rate_elem": "TANSW",
+  "boundary_qty": "1000000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "7835",
+  "ban": "443K712389060",
+  "seq": 138,
+  "rate_elem": "ORIGAC",
+  "boundary_qty": "2500000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ },
+ {
+  "day": "2024-09-30",
+  "ocn": "2062",
+  "ban": "423D432363218",
+  "seq": 167,
+  "rate_elem": "TERMAC",
+  "boundary_qty": "1000000.00",
+  "expected_band_under_correct_logic": "the band whose FROM equals this quantity"
+ }
+]

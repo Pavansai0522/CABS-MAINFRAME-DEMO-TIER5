@@ -1,0 +1,319 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CABSXACC.
+      *****************************************************************
+      * CABSXACC - SORT E15 INPUT EXIT - ACCOUNT STATUS SELECTION     *
+      * APPLICATION : CABS                                            *
+      * COMPILER    : ENTERPRISE COBOL                                *
+      * INVOKED BY  : OS SORT/MERGE, MODS E15=(CABSXACC,4096)         *
+      *               ON CONTROL CARD MEMBER                          *
+      *               JCL/CTLCARDS/MVT/CABSRT09                       *
+      * INPUTS      : ONE 200 BYTE ACCOUNT RECORD PER ENTRY FROM      *
+      *               TELCABS.CABS.ACCOUNT.RAW                        *
+      * OUTPUTS     : THE SAME RECORD UNCHANGED, OR A DELETE REPLY    *
+      * CONTROL     : NONE - EXITS DO NOT WRITE CTLOUT, CABS-STD-041  *
+      * BALANCE     : SORTIN = RECORDS KEPT + WS-DROP-TOTAL           *
+      * RESTART     : NOT RESTARTABLE - RERUN THE WHOLE SORT STEP     *
+      *                                                               *
+      * LINKAGE CONVENTION                                            *
+      *   SORT PASSES REGISTER 1 POINTING AT A TWO WORD PARAMETER     *
+      *   LIST.  WORD ONE IS THE ADDRESS OF THE INPUT RECORD, OR      *
+      *   BINARY ZERO WHEN THE INPUT DATA SET IS EXHAUSTED.  WORD     *
+      *   TWO IS THE ADDRESS OF THE RECORD LENGTH HALFWORD AND IS     *
+      *   NOT REFERENCED FOR FIXED LENGTH INPUT.  THE EXIT REPLIES    *
+      *   IN THE RETURN-CODE SPECIAL REGISTER -                       *
+      *     00  NO ACTION - SORT TAKES THE RECORD UNCHANGED           *
+      *     04  DELETE THE RECORD                                     *
+      *     08  RETURN THE ALTERED RECORD ADDRESSED BY WORD ONE       *
+      *     12  DO NOT ENTER THIS EXIT AGAIN                          *
+      *     16  TERMINATE THE SORT WITH A USER COMPLETION CODE        *
+      *   WORKING STORAGE PERSISTS FOR THE LIFE OF THE SORT STEP.     *
+      *   THE MODULE IS LOADED ONCE AND ENTERED ONCE PER RECORD, SO   *
+      *   COUNTERS AND TABLES ACCUMULATE ACROSS ENTRIES.  THE EXIT    *
+      *   IS ENTERED A FINAL TIME WITH A NULL RECORD ADDRESS.         *
+      *                                                               *
+      * WHAT THIS EXIT DECIDES                                        *
+      *   AN ACCOUNT WHOSE STATUS BYTE AT POSITION 60 IS C IS         *
+      *   CLOSED AND IS TAKEN OUT HERE.  THE TEST WAS CARRIED ON      *
+      *   THE CONTROL CARD AS AN INCLUDE CONDITION UNTIL THE STEP     *
+      *   WAS MOVED TO A SORT THAT HAS NO INCLUDE STATEMENT.  IT      *
+      *   WAS BROUGHT IN WITHOUT ALTERING WHAT IT SELECTS.            *
+      *   CLOSED ACCOUNTS THEREFORE NEVER REACH CABBIL01 AT ALL       *
+      *   AND ARE NOT COUNTED IN ITS SKIP REASON S2.  CABBIL01        *
+      *   STILL CARRIES THE S2 TEST AND STILL PRINTS THE S2           *
+      *   COUNTER, WHICH IS WHY THAT COUNTER HAS READ ZERO EVERY      *
+      *   NIGHT SINCE 1996.                                           *
+      *   THE CALLING PROGRAM'S BALANCE IS UNAFFECTED BY THIS         *
+      *   MODULE - A SORT STEP WRITES NO CONTROL RECORD OF ITS OWN.   *
+      *                                                               *
+      * REVISION HISTORY                                              *
+      *   V1.00  1988-03-21  R.T.WHEELER   INITIAL - ASSEMBLER F      *
+      *   V1.02  1993-07-09  D.OKONKWO     STATUS BYTE MOVED TO 60    *
+      *   V1.05  1996-11-30  J.CALLAGHAN   CLOSED ACCOUNTS TAKEN      *
+      *                                    OUT OF THE TRIGGER FEED    *
+      *   V2.00  2005-04-18  P.NAIR        RECODED IN COBOL FOR LE    *
+      *   V2.03  2014-01-27  L.FERREIRA    CLOSE AGE BANDS ADDED      *
+      *   V2.06  2019-04-11  M.HAAS        RECOMPILE ONLY - LE V6.2   *
+      *****************************************************************
+       ENVIRONMENT DIVISION.
+       CONFIGURATION SECTION.
+       SOURCE-COMPUTER. IBM-370.
+       OBJECT-COMPUTER. IBM-370.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+      *
+      * COUNTERS SURVIVE FROM ONE ENTRY TO THE NEXT.  THE SORT STEP
+      * LOADS THIS MODULE ONCE AND HOLDS IT FOR THE WHOLE PASS.
+      *
+       01  WS-MODULE-IDENT.
+           05  FILLER                  PIC X(08) VALUE 'CABSXACC'.
+           05  FILLER                  PIC X(08) VALUE ' V2.06  '.
+       01  WS-SWITCHES.
+           05  WS-FIRST-ENTRY-SW       PIC X(01) VALUE 'Y'.
+               88  WS-FIRST-ENTRY      VALUE 'Y'.
+           05  WS-EOF-SEEN-SW          PIC X(01) VALUE 'N'.
+               88  WS-EOF-SEEN         VALUE 'Y'.
+       01  WS-COUNTERS.
+           05  WS-ENTRY-CNT            PIC S9(11) COMP-3 VALUE 0.
+           05  WS-KEPT-CNT             PIC S9(11) COMP-3 VALUE 0.
+           05  WS-DROP-TOTAL           PIC S9(11) COMP-3 VALUE 0.
+           05  WS-DROP-CLOSED          PIC S9(11) COMP-3 VALUE 0.
+           05  WS-KEPT-ACTIVE          PIC S9(11) COMP-3 VALUE 0.
+           05  WS-KEPT-SUSPENDED       PIC S9(11) COMP-3 VALUE 0.
+           05  WS-KEPT-UNKNOWN         PIC S9(11) COMP-3 VALUE 0.
+           05  WS-CLOSED-WITH-BAL      PIC S9(09) COMP-3 VALUE 0.
+           05  WS-BAD-CLOSE-DATE       PIC S9(09) COMP-3 VALUE 0.
+       01  WS-VALUES.
+           05  WS-DROP-BALANCE         PIC S9(13)V9(02) COMP-3
+                                                  VALUE 0.
+      *
+      * CLOSED ACCOUNTS ARE BANDED BY HOW LONG AGO THEY CLOSED SO
+      * THAT THE OPERATIONS LOG SHOWS WHETHER THE RAW EXTRACT IS
+      * STILL CARRYING ACCOUNTS CLOSED YEARS AGO.  THE BANDS ARE IN
+      * DAYS AND ARE HELD IN SOURCE.
+      *
+       01  WS-AGE-BANDS.
+           05  WS-AGE-000-090          PIC S9(09) COMP-3 VALUE 0.
+           05  WS-AGE-091-365          PIC S9(09) COMP-3 VALUE 0.
+           05  WS-AGE-OVER-365         PIC S9(09) COMP-3 VALUE 0.
+      *
+      * DATE WORK.  ALL ACCOUNT DATES ON THIS FILE ARE YYDDD AND ARE
+      * READ WITH A PIVOT YEAR OF 70 - A YEAR LESS THAN 70 IS IN THE
+      * TWO THOUSANDS.
+      *
+       01  WS-DATE-WORK.
+           05  WS-DW-CURRENT           PIC 9(07) VALUE 0.
+           05  WS-DW-CURRENT-R REDEFINES WS-DW-CURRENT.
+               10  WS-DW-CUR-CCYY      PIC 9(04).
+               10  WS-DW-CUR-DDD       PIC 9(03).
+           05  WS-DW-PIVOT-YY          PIC 9(02) VALUE 70.
+           05  WS-DW-REC-YYDDD         PIC 9(05) VALUE 0.
+           05  WS-DW-REC-R REDEFINES WS-DW-REC-YYDDD.
+               10  WS-DW-REC-YY        PIC 9(02).
+               10  WS-DW-REC-DDD       PIC 9(03).
+           05  WS-DW-REC-CCYY          PIC 9(04) VALUE 0.
+           05  WS-DW-AGE-DAYS          PIC S9(07) COMP-3 VALUE 0.
+           05  WS-DW-YEAR-SUB          PIC S9(05) COMP-3 VALUE 0.
+           05  WS-DW-LEAP-CNT          PIC S9(05) COMP-3 VALUE 0.
+           05  WS-DW-Q1                PIC S9(05) COMP-3 VALUE 0.
+           05  WS-DW-Q2                PIC S9(05) COMP-3 VALUE 0.
+      *
+       LINKAGE SECTION.
+       01  LK-PARM-LIST.
+           05  LK-RECORD-PTR           POINTER.
+           05  LK-LENGTH-PTR           POINTER.
+      *
+      * A HAND MAINTAINED VIEW OF THE 200 BYTE RAW ACCOUNT RECORD.
+      * IT IS NOT A COPYBOOK - ONLY THE FIELDS THIS EXIT NEEDS ARE
+      * NAMED AND THE REST IS CARRIED AS FILLER.
+      *
+       01  LK-SORT-RECORD.
+           05  LK-AC-BAN               PIC X(13).
+           05  LK-AC-OCN               PIC X(04).
+           05  LK-AC-RAO               PIC 9(03).
+           05  LK-AC-NAME              PIC X(30).
+           05  LK-AC-STATE-CD          PIC X(02).
+           05  LK-AC-BILL-CYCLE        PIC 9(02).
+           05  LK-AC-MEDIA-CD          PIC X(01).
+           05  LK-AC-CLASS-CD          PIC X(02).
+           05  LK-AC-DEPOSIT-SW        PIC X(01).
+           05  LK-AC-FILLER-1          PIC X(01).
+           05  LK-AC-STATUS-CD         PIC X(01).
+               88  LK-AC-ACTIVE        VALUE 'A'.
+               88  LK-AC-CLOSED        VALUE 'C'.
+               88  LK-AC-SUSPENDED     VALUE 'S'.
+           05  LK-AC-STATUS-YYDDD      PIC 9(05).
+           05  LK-AC-ESTAB-YYDDD       PIC 9(05).
+           05  LK-AC-LAST-BILL-YYDDD   PIC 9(05).
+           05  LK-AC-BILL-PERIOD       PIC 9(06).
+           05  LK-AC-CREDIT-CD         PIC X(01).
+           05  LK-AC-TAX-EXEMPT-SW     PIC X(01).
+           05  LK-AC-BALANCE           PIC S9(11)V9(02) COMP-3.
+           05  LK-AC-CONTRACT-ID       PIC X(12).
+           05  LK-AC-TAIL              PIC X(98).
+      *
+       PROCEDURE DIVISION USING LK-PARM-LIST.
+       P0000-MAINLINE.
+           PERFORM P1000-INIT THRU P1000-EXIT.
+           IF LK-RECORD-PTR = NULL
+               PERFORM P8000-END-OF-INPUT THRU P8000-EXIT
+               GOBACK
+           END-IF.
+           SET ADDRESS OF LK-SORT-RECORD TO LK-RECORD-PTR.
+           ADD 1 TO WS-ENTRY-CNT.
+           PERFORM P2000-SCREEN-STATUS THRU P2000-EXIT.
+           IF RETURN-CODE = 4
+               GOBACK
+           END-IF.
+           PERFORM P3000-COUNT-KEPT THRU P3000-EXIT.
+           MOVE ZERO TO RETURN-CODE.
+           GOBACK.
+
+       P1000-INIT.
+      * ENTERED ONCE PER RECORD.  ONLY THE FIRST ENTRY DOES ANY
+      * SET UP - EVERY LATER ENTRY FALLS STRAIGHT THROUGH.
+           MOVE ZERO TO RETURN-CODE.
+           IF WS-FIRST-ENTRY
+               MOVE 'N' TO WS-FIRST-ENTRY-SW
+               ACCEPT WS-DW-CURRENT FROM DAY
+               DISPLAY 'CABSXACC ENTERED - ACCOUNT STATUS SELECTION'
+           END-IF.
+
+       P1000-EXIT.
+           EXIT.
+
+       P2000-SCREEN-STATUS.
+      * THE STATUS BYTE SITS AT POSITION 60.  C MEANS THE ACCOUNT
+      * WAS CLOSED AND THE FINAL BILL HAS ALREADY BEEN RENDERED.
+      * THOSE RECORDS ARE TAKEN OUT SO THE BILL TRIGGER NEVER SEES
+      * THEM.  EVERY OTHER STATUS IS PASSED THROUGH UNCHANGED,
+      * INCLUDING A STATUS THIS EXIT DOES NOT RECOGNISE - THE
+      * TRIGGER HAS ITS OWN TESTS FOR THOSE.
+           IF LK-AC-CLOSED
+               PERFORM P2200-DROP-CLOSED THRU P2200-EXIT
+               MOVE 4 TO RETURN-CODE
+           END-IF.
+
+       P2000-EXIT.
+           EXIT.
+
+       P2200-DROP-CLOSED.
+      * ACCUMULATE WHAT IS BEING TAKEN OUT.  THESE TALLIES GO TO
+      * SYSOUT AT END OF INPUT AND ARE THE ONLY PLACE THE VOLUME OF
+      * CLOSED ACCOUNTS IN THE RAW EXTRACT IS RECORDED.
+           ADD 1 TO WS-DROP-CLOSED.
+           ADD 1 TO WS-DROP-TOTAL.
+           ADD LK-AC-BALANCE TO WS-DROP-BALANCE.
+           IF LK-AC-BALANCE NOT = ZERO
+               ADD 1 TO WS-CLOSED-WITH-BAL
+           END-IF.
+           MOVE LK-AC-STATUS-YYDDD TO WS-DW-REC-YYDDD.
+           PERFORM P6000-AGE-DAYS THRU P6000-EXIT.
+
+       P2200-EXIT.
+           EXIT.
+
+       P3000-COUNT-KEPT.
+      * A KEPT RECORD IS COUNTED AGAINST ITS STATUS SO THE TALLY
+      * CAN BE COMPARED WITH THE TRIGGER FILE COUNT CABBIL01
+      * PRINTS.
+           ADD 1 TO WS-KEPT-CNT.
+           EVALUATE TRUE
+               WHEN LK-AC-ACTIVE
+                   ADD 1 TO WS-KEPT-ACTIVE
+               WHEN LK-AC-SUSPENDED
+                   ADD 1 TO WS-KEPT-SUSPENDED
+               WHEN OTHER
+                   ADD 1 TO WS-KEPT-UNKNOWN
+           END-EVALUATE.
+
+       P3000-EXIT.
+           EXIT.
+
+       P6000-AGE-DAYS.
+      * DAYS BETWEEN THE STATUS DATE AND TODAY.  THE STATUS DATE IS
+      * YYDDD AND IS EXPANDED WITH THE PIVOT YEAR OF 70.  LEAP DAYS
+      * ARE COUNTED BY WALKING THE INTERVENING YEARS RATHER THAN BY
+      * A DIVISION, BECAUSE THE CENTURY RULE HAS TO BE APPLIED TO
+      * EACH ONE.
+           MOVE ZERO TO WS-DW-AGE-DAYS.
+           MOVE ZERO TO WS-DW-LEAP-CNT.
+           IF WS-DW-REC-DDD < 1 OR WS-DW-REC-DDD > 366
+               ADD 1 TO WS-BAD-CLOSE-DATE
+               MOVE ZERO TO WS-DW-AGE-DAYS
+               GO TO P6000-EXIT
+           END-IF.
+           IF WS-DW-REC-YY < WS-DW-PIVOT-YY
+               COMPUTE WS-DW-REC-CCYY = 2000 + WS-DW-REC-YY
+           ELSE
+               COMPUTE WS-DW-REC-CCYY = 1900 + WS-DW-REC-YY
+           END-IF.
+           IF WS-DW-REC-CCYY > WS-DW-CUR-CCYY
+               ADD 1 TO WS-BAD-CLOSE-DATE
+               MOVE ZERO TO WS-DW-AGE-DAYS
+               GO TO P6000-EXIT
+           END-IF.
+           PERFORM P6200-LEAP-DAYS THRU P6200-EXIT.
+           COMPUTE WS-DW-YEAR-SUB =
+                   WS-DW-CUR-CCYY - WS-DW-REC-CCYY.
+           COMPUTE WS-DW-AGE-DAYS = (WS-DW-YEAR-SUB * 365)
+                   + WS-DW-LEAP-CNT
+                   + WS-DW-CUR-DDD - WS-DW-REC-DDD.
+           IF WS-DW-AGE-DAYS < ZERO
+               MOVE ZERO TO WS-DW-AGE-DAYS
+           END-IF.
+           EVALUATE TRUE
+               WHEN WS-DW-AGE-DAYS NOT > 90
+                   ADD 1 TO WS-AGE-000-090
+               WHEN WS-DW-AGE-DAYS NOT > 365
+                   ADD 1 TO WS-AGE-091-365
+               WHEN OTHER
+                   ADD 1 TO WS-AGE-OVER-365
+           END-EVALUATE.
+
+       P6000-EXIT.
+           EXIT.
+
+       P6200-LEAP-DAYS.
+      * LEAP DAYS BETWEEN THE TWO YEARS.  ONE FOR EACH YEAR
+      * DIVISIBLE BY FOUR, LESS THE CENTURY YEARS, PLUS BACK THE
+      * ONES DIVISIBLE BY FOUR HUNDRED.  THE DIVIDES TRUNCATE,
+      * WHICH IS WHAT THE COUNT NEEDS.
+           DIVIDE WS-DW-CUR-CCYY BY 4 GIVING WS-DW-Q1.
+           DIVIDE WS-DW-REC-CCYY BY 4 GIVING WS-DW-Q2.
+           COMPUTE WS-DW-LEAP-CNT = WS-DW-Q1 - WS-DW-Q2.
+           DIVIDE WS-DW-CUR-CCYY BY 100 GIVING WS-DW-Q1.
+           DIVIDE WS-DW-REC-CCYY BY 100 GIVING WS-DW-Q2.
+           COMPUTE WS-DW-LEAP-CNT =
+                   WS-DW-LEAP-CNT - WS-DW-Q1 + WS-DW-Q2.
+           DIVIDE WS-DW-CUR-CCYY BY 400 GIVING WS-DW-Q1.
+           DIVIDE WS-DW-REC-CCYY BY 400 GIVING WS-DW-Q2.
+           COMPUTE WS-DW-LEAP-CNT =
+                   WS-DW-LEAP-CNT + WS-DW-Q1 - WS-DW-Q2.
+
+       P6200-EXIT.
+           EXIT.
+
+       P8000-END-OF-INPUT.
+      * A NULL RECORD ADDRESS MEANS SORTIN IS EXHAUSTED.  THE EXIT
+      * HAS NOTHING TO INSERT, SO IT REPLIES ZERO AND WRITES ITS
+      * TALLIES TO THE MESSAGE DATA SET.  THESE COUNTS ARE THE ONLY
+      * RECORD OF WHAT THE EXIT REMOVED - THEY ARE NOT CARRIED INTO
+      * ANY CONTROL RECORD.
+           MOVE 'Y' TO WS-EOF-SEEN-SW.
+           DISPLAY 'CABSXACC ENTRIES     ' WS-ENTRY-CNT.
+           DISPLAY 'CABSXACC KEPT        ' WS-KEPT-CNT.
+           DISPLAY 'CABSXACC KEPT ACTIVE ' WS-KEPT-ACTIVE.
+           DISPLAY 'CABSXACC KEPT SUSPND ' WS-KEPT-SUSPENDED.
+           DISPLAY 'CABSXACC KEPT OTHER  ' WS-KEPT-UNKNOWN.
+           DISPLAY 'CABSXACC CLOSED DROP ' WS-DROP-CLOSED.
+           DISPLAY 'CABSXACC DROPPED     ' WS-DROP-TOTAL.
+           DISPLAY 'CABSXACC DROP BAL    ' WS-DROP-BALANCE.
+           DISPLAY 'CABSXACC DROP NONZERO' WS-CLOSED-WITH-BAL.
+           DISPLAY 'CABSXACC CLOSE 0-90  ' WS-AGE-000-090.
+           DISPLAY 'CABSXACC CLOSE 91-365' WS-AGE-091-365.
+           DISPLAY 'CABSXACC CLOSE 365+  ' WS-AGE-OVER-365.
+           DISPLAY 'CABSXACC DATE UNUSED ' WS-BAD-CLOSE-DATE.
+           MOVE ZERO TO RETURN-CODE.
+
+       P8000-EXIT.
+           EXIT.

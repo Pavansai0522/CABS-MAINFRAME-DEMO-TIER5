@@ -1,0 +1,46 @@
+[
+  {
+    "id": "D3",
+    "family": "JURIS",
+    "file": "BATCH/JURIS/CABJUR07.cbl",
+    "paragraph": "P1400-BUILD-WINDOW / P2300-WINDOW-TEST",
+    "construct": "Cross-year Julian (YYDDD) arithmetic and comparison performed as plain numeric arithmetic on the packed YYDDD value instead of converting to an absolute day number",
+    "description": "P1400-BUILD-WINDOW derives the end of the restatement window with COMPUTE WS-WA-THRU-N = WS-WA-FROM-N + WS-RS-SPAN-DAYS, i.e. it adds the window length in days directly to a YYDDD value. Day-of-year addition performed this way does not roll the year: a window starting 24274 with a 92 day span yields 24366, and a window starting 24365 with a 3 day span yields 24368. P2300-WINDOW-TEST then rejects any usage record whose CD-CONN-YYDDD is greater than that derived end date. Every usage record dated in the first days of the following year (25001, 25002 ...) fails the test and is counted as CT-CARRIED-FWD instead of being restated. The program already contains a correct absolute-day conversion (P6500-JULIAN-TO-ABS) and a correct day-addition routine with year rollover (P6520-ADD-DAYS); neither is used by the window derivation. The balancing equation still holds because the excluded records are counted as carried forward, so no control report flags it.",
+    "business_impact": "Any restatement window that spans a year boundary silently omits the day-001-onwards portion of the quarter. The adjustment raised to the carrier is short by the value of the excluded minutes. Because the omitted records are counted as carried forward the run balances, the register prints, and nothing in the control framework reports a problem. The error recurs every fourth quarter and is cumulative across carriers.",
+    "correct_modernization_response": "Convert both window endpoints and the usage date to an absolute day number (or a real date type) before any comparison, and derive the window end by adding days to a date, not to a YYDDD integer. The existing P6520-ADD-DAYS routine already does this correctly and should be used. In a target-state rewrite the window should be expressed as a half-open date interval [from, thru) using a native date type; the YYDDD representation should not survive migration.",
+    "detectable_by": "parity_test"
+  },
+  {
+    "id": "D4",
+    "family": "SETTLE",
+    "file": "BATCH/SETTLE/CABSET01.cbl",
+    "paragraph": "P3200-PCT-RESIDUAL",
+    "construct": "Silent absorption of a meet-point percentage residual into our own share instead of raising an exception",
+    "description": "The two meet-point billing percentages are filed independently by the two LECs and are required to sum to exactly 100.00000. P3200-PCT-RESIDUAL computes WS-MW-TOTAL-PCT = WS-MW-OUR-PCT + WS-MW-THEIR-PCT and, when the total is not 100, computes the residual as 100.00000 - total and executes ADD WS-MW-RESIDUAL-PCT TO WS-MW-OUR-PCT. Our percentage is inflated by the residual and the split in P3500-SPLIT then allocates that residual to us. The error code EC-MPB-PCT-INVALID exists in CABSERR and is used elsewhere in the program, but is not raised here; no suspense record is written and the settlement is not held. A variance record is written to VAROUT and a line is printed, but the record is informational only and the settlement completes with the inflated percentage. P3700-RECONCILE cannot detect it because our share plus their share still equals gross after the adjustment.",
+    "business_impact": "Whenever the two filed percentages sum to less than 100 the difference is booked as our revenue. Where they sum to more than 100 the residual is negative and our revenue is understated. The overstatement is systematic, is repeated every month for every affected circuit, and is invisible in the settlement totals because the split reconciles. It surfaces only when the other LEC bills its own share and the two invoices are compared - typically in a dispute months later, by which time several periods have closed.",
+    "correct_modernization_response": "A percentage pair that does not sum to 100 is a data defect and must be quarantined, not absorbed. Raise EC-MPB-PCT-INVALID, write the circuit to suspense, exclude it from the settlement run and require the two LECs to agree the percentages before the circuit is settled. Where a tolerance is genuinely required it must be explicit, small, symmetric and configurable, and the absorbed amount must be posted to a named suspense account rather than to revenue.",
+    "detectable_by": "static"
+  },
+  {
+    "id": "D5",
+    "family": "SETTLE",
+    "file": "BATCH/SETTLE/CABSET05.cbl",
+    "paragraph": "P3000-APPLY-RATE / P3200-ISP-CAP / P3400-NET-DUE",
+    "construct": "ISP-bound minute cap applied after the rate has been applied rather than before, so capped minutes remain inside the compensable amount",
+    "description": "P2000-PROCESS performs P3000-APPLY-RATE before P3200-ISP-CAP. P3000-APPLY-RATE computes WS-RC-GROSS-AMT ROUNDED = WS-RC-TOTAL-MOU * WS-RC-RATE using the full terminating minutes, including ISP-bound minutes above the agreed cap. P3200-ISP-CAP then correctly derives WS-RC-CAPPED-MOU and WS-RC-BILL-MOU and writes the capped detail to CAPOUT, but it never recomputes the money - the gross amount already includes the capped minutes. P3400-NET-DUE derives the net payable directly from that gross. The settlement record therefore carries a correct ST-BILLABLE-MOU and ST-CAPPED-MOU alongside an ST-GROSS-AMT and ST-NET-DUE calculated on the uncapped total. The header comment block in working storage states the rule (item 4) explicitly, and the 2012 revision history entry claims the cap was moved ahead of the rate; the code order was never changed.",
+    "business_impact": "Every CLEC whose ISP-bound traffic exceeds its cap is compensated for minutes that the interconnection agreement says are not compensable. The overpayment equals capped MOU multiplied by the reciprocal rate and is reported on the register as the value of capped minutes, which makes it look like a control total rather than an overpayment. The capped-minute detail file sent to the CLEC contradicts the invoice, which is the usual way the error is found. Sign of the error reverses if the cap override on the control card is used to impose a cap lower than actual ISP traffic.",
+    "correct_modernization_response": "Apply the cap to the minutes first and rate only the billable minutes: billable MOU = total MOU - max(0, ISP MOU - cap); gross = billable MOU * rate. Capped minutes are compensated at zero by construction. Add an assertion that ST-GROSS-AMT equals ST-BILLABLE-MOU * ST-RATE-APPLIED and fail the run if it does not, and reconcile the settlement file against the capped-minute detail file as a standing control.",
+    "detectable_by": "parity_test"
+  },
+  {
+    "id": "D7",
+    "family": "JURIS",
+    "file": "BATCH/JURIS/CABJUR07.cbl",
+    "paragraph": "P3200-FIND-PRIOR",
+    "construct": "Unknown prior factor defaulted to the current factor, producing a zero delta and silently suppressing a legitimate adjustment",
+    "description": "P3200-FIND-PRIOR resolves the factor the usage was originally billed under. When the scan of the in-core factor table leaves WS-RW-PRIOR-PIU at zero - meaning no superseded filing was found and FC-PRIOR-PIU on the replacing record was itself zero - the code executes MOVE WS-RW-NEW-PIU TO WS-RW-PRIOR-PIU and bumps WS-NOBASIS-CNT. The prior and new factors are then identical, so P4100-SPLIT-PRIOR and P4200-SPLIT-NEW produce the same amount, P5000-COMPUTE-DELTA yields exactly zero, P5300-MATERIALITY marks the record immaterial and it is counted as CT-SUMMARISED. No adjustment is raised. The error code EC-RESTATE-NO-BASIS (E015) exists in CABSERR precisely for this condition and is never referenced by the program; message table entry 4 ('NO PRIOR FACTOR - NO RESTATEMENT BASIS') is likewise never moved. The only trace is the WS-NOBASIS-CNT figure on the job log, which the operations sheet does not transcribe.",
+    "business_impact": "Carriers whose prior factor was never captured - most commonly a first filing replacing a defaulted factor, or a filing loaded before the 2003 change that started carrying FC-PRIOR-PIU forward - receive no restatement adjustment at all. The whole of the difference between the defaulted factor and the filed factor is written off silently. The run balances, the register prints, and the missing adjustment is only discoverable by comparing the count of usage records inside the window against the count of adjustments raised.",
+    "correct_modernization_response": "A missing prior factor is an exception, not a default. Raise EC-RESTATE-NO-BASIS, write the record to suspense and hold the carrier out of the restatement until the prior basis is established from the factor history. In a target-state design the factor table must be bitemporal so that the factor in force on any usage date can always be recovered, which removes the condition entirely.",
+    "detectable_by": "static"
+  }
+]

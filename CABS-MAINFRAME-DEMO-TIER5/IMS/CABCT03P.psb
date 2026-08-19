@@ -1,0 +1,22 @@
+*****************************************************************
+* CABCT03P - PSB FOR CABCT03 (CIRCUIT MASTER EXTRACT)           *
+* SENSITIVE TO ALL THREE CABCIRDB SEGMENTS.  PROCOPT=A - THE    *
+* NIGHTLY TERM-DATE SWEEP UPDATES CIRCTERM IN PLACE WHEN A      *
+* DISCONNECT ORDER COMPLETES.                                    *
+* REVISION HISTORY                                              *
+*   V1.00  1993-01-22  R.OKAFOR    INITIAL GEN, PAIRED WITH      *
+*                                  CABCIRDB V1.01                *
+*   V1.01  1994-06-30  L.FENNIMORE SENSEG CIRCTERM ADDED AFTER   *
+*                                  CABCIRDB V1.02                *
+*   V1.02  1999-02-08  T.OKONKWO   RECOMPILE - NO PSB CHANGE,    *
+*                                  UNDERLYING DBD MOVED TO VSAM  *
+*****************************************************************
+         PRINT NOGEN
+*
+         PCB   TYPE=DB,DBDNAME=CABCIRDB,KEYLEN=25,PROCOPT=A
+         SENSEG NAME=CIRCSEG,PARENT=0
+         SENSEG NAME=CIRCMPB,PARENT=CIRCSEG
+         SENSEG NAME=CIRCTERM,PARENT=CIRCSEG
+*
+         PSBGEN LANG=COBOL,PSBNAME=CABCT03P,CMPAT=YES
+         END

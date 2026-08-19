@@ -1,0 +1,46 @@
+//CABVDEF3 JOB (CABS,VSAM),'DEFINE HOLD REASON MASTER',
+//             CLASS=B,MSGCLASS=X,MSGLEVEL=(1,1),NOTIFY=&SYSUID
+//*****************************************************************
+//* CABVDEF3 - DEFINE TELCABS.CABS.HOLDRSN                        *
+//*                                                               *
+//* THE HOLD REASON MASTER.  CABBIL10 LOADS IT AT INIT AND ABENDS *
+//* IF IT CANNOT BE STARTED.  NOTHING IN THE ESTATE WRITES IT.    *
+//* THE BILLING CONTROL TEAM MAINTAIN IT BY HAND.                 *
+//* ALLOCATION IS HELD IN THIS MEMBER ONLY - SEE CABS-STD-058.   *
+//*                                                               *
+//* THE SEED BELOW CARRIES THE FIVE REASON CODES CABBIL10 CAN     *
+//* RAISE.  ADDING A SIXTH MEANS CHANGING THE PROGRAM AS WELL -   *
+//* THE CODES ARE COMPILED IN AND THE MASTER ONLY SUPPLIES THE    *
+//* PRINTED TEXT.                                                 *
+//*****************************************************************
+//STEP010  EXEC PGM=IDCAMS
+//SYSPRINT DD SYSOUT=*
+//SYSIN    DD *
+  DEFINE CLUSTER ( -
+         NAME(TELCABS.CABS.HOLDRSN) -
+         INDEXED -
+         KEYS(4 0) -
+         RECORDSIZE(80 80) -
+         SHAREOPTIONS(2 3) -
+         VOLUMES(CABS02) -
+         TRACKS(5 2) -
+         FREESPACE(20 10) ) -
+     DATA ( -
+         NAME(TELCABS.CABS.HOLDRSN.DATA) -
+         CISZ(2048) ) -
+     INDEX ( -
+         NAME(TELCABS.CABS.HOLDRSN.INDEX) -
+         CISZ(1024) )
+  IF LASTCC = 0 THEN -
+     REPRO INFILE(SEEDIN) -
+           OUTDATASET(TELCABS.CABS.HOLDRSN)
+/*
+//SEEDIN   DD *
+HNEGNEGATIVE INVOICE - REFUND DUE            FYBILLCTL
+HVARBILL TO BILL VARIANCE EXCEEDED           EYBILLCTL
+HLINNO DETAIL LINES WITH A CURRENT CHARGE    FNBILLCTL
+HJURJURISDICTIONAL SPLIT DOES NOT ADD BACK   EYREGLTRY
+HLIMABOVE THE DELEGATED AUTHORITY LIMIT      WYFINANCE
+EXMPCARRIER IS TAX EXEMPT                    WYTAXDEPT
+/*
+//

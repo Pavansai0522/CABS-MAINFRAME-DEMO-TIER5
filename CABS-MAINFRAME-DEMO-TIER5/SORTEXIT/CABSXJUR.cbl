@@ -1,0 +1,351 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CABSXJUR.
+      *****************************************************************
+      * CABSXJUR - SORT E15 INPUT EXIT - JURISDICTION RE-DERIVATION   *
+      * APPLICATION : CABS                                            *
+      * COMPILER    : ENTERPRISE COBOL                                *
+      * INVOKED BY  : OS SORT/MERGE, MODS E15=(CABSXJUR,2048,         *
+      *               SORTEXIT,N) ON CONTROL CARD MEMBER              *
+      *               JCL/CTLCARDS/CABSRT11                           *
+      * INPUTS      : ONE VARIABLE LENGTH BILL DETAIL RECORD PER      *
+      *               ENTRY, 108 TO 1651 BYTES INCLUDING THE RDW      *
+      * OUTPUTS     : THE SAME RECORD WITH THE JURISDICTION BYTE      *
+      *               RESOLVED, OR NOTHING                            *
+      * CONTROL     : NONE - EXITS DO NOT WRITE CTLOUT, CABS-STD-041  *
+      * BALANCE     : SORTIN = RECORDS RETURNED + WS-DROP-SHORT       *
+      * RESTART     : NOT RESTARTABLE - RERUN THE WHOLE SORT STEP     *
+      *                                                               *
+      * LINKAGE CONVENTION                                            *
+      *   SORT PASSES REGISTER 1 POINTING AT A TWO WORD PARAMETER     *
+      *   LIST.  WORD ONE IS THE ADDRESS OF THE INPUT RECORD, OR      *
+      *   BINARY ZERO WHEN THE INPUT DATA SET IS EXHAUSTED.  WORD     *
+      *   TWO IS THE ADDRESS OF THE RECORD LENGTH HALFWORD.  ON THIS  *
+      *   SORT THE INPUT IS VARIABLE LENGTH, SO WORD TWO IS LIVE AND  *
+      *   IS ADDRESSED HERE - IT CARRIES THE WHOLE RECORD LENGTH,     *
+      *   THE FOUR BYTE RDW INCLUDED, WHICH IS THE SAME VALUE THAT    *
+      *   SITS IN THE FIRST HALFWORD OF THE RECORD ITSELF.  THE       *
+      *   EXIT REPLIES IN THE RETURN-CODE SPECIAL REGISTER -          *
+      *     00  NO ACTION - SORT TAKES THE RECORD UNCHANGED           *
+      *     04  DELETE THE RECORD                                     *
+      *     08  RETURN THE ALTERED RECORD ADDRESSED BY WORD ONE       *
+      *     12  DO NOT ENTER THIS EXIT AGAIN                          *
+      *     16  TERMINATE THE SORT WITH A USER COMPLETION CODE        *
+      *   WORKING STORAGE PERSISTS FOR THE LIFE OF THE SORT STEP, SO  *
+      *   THE COUNTERS ACCUMULATE ACROSS ENTRIES.  THE EXIT IS        *
+      *   ENTERED A FINAL TIME WITH A NULL RECORD ADDRESS.            *
+      *                                                               *
+      * RECORD POSITIONS                                              *
+      *   THE SORT FIELDS ON CABSRT11 ARE 26,4 FOR THE OCN, 31,2 FOR  *
+      *   THE STATE AND 30,1 FOR THE JURISDICTION.  ON A VARIABLE     *
+      *   LENGTH FILE THOSE POSITIONS COUNT FROM THE FIRST BYTE OF    *
+      *   THE RDW, SO BYTE 26 OF THE RECORD IS BYTE 22 OF THE DATA.   *
+      *   THE LINKAGE LAYOUT BELOW STARTS AT THE RDW FOR THAT REASON. *
+      *                                                               *
+      * THE COMMENT ON CABSRT11 DESCRIBES THIS MODULE AS ASSEMBLER.   *
+      * IT WAS RECODED IN COBOL FOR LE IN 2005 AND THE CARD WAS       *
+      * LEFT AS IT WAS.                                               *
+      *                                                               *
+      * REVISION HISTORY                                              *
+      *   V1.00  1988-04-11  R.T.WHEELER   INITIAL - ASSEMBLER F      *
+      *   V1.02  1991-07-23  D.OKONKWO     TERM LATA ADDED TO TEST    *
+      *   V1.06  1996-11-04  B.R.HALVORSEN STRADDLING LATA TABLE      *
+      *   V1.08  2001-02-19  J.CALLAGHAN   SHORT RECORD DELETE        *
+      *   V2.00  2005-06-13  P.NAIR        RECODED IN COBOL FOR LE    *
+      *   V2.02  2010-09-08  S.MBEKI       X COUNTED SEPARATELY       *
+      *   V2.03  2016-04-27  M.HAAS        RECOMPILE ONLY - LE V6.1   *
+      *****************************************************************
+       ENVIRONMENT DIVISION.
+       CONFIGURATION SECTION.
+       SOURCE-COMPUTER. IBM-370.
+       OBJECT-COMPUTER. IBM-370.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+      *
+      * COUNTERS SURVIVE FROM ONE ENTRY TO THE NEXT.  THE SORT STEP
+      * LOADS THIS MODULE ONCE AND HOLDS IT FOR THE WHOLE PASS.
+       01  WS-MODULE-IDENT.
+           05  FILLER                  PIC X(08) VALUE 'CABSXJUR'.
+           05  FILLER                  PIC X(08) VALUE ' V2.03  '.
+       01  WS-SWITCHES.
+           05  WS-FIRST-ENTRY-SW       PIC X(01) VALUE 'Y'.
+               88  WS-FIRST-ENTRY      VALUE 'Y'.
+           05  WS-LATA-FOUND-SW        PIC X(01) VALUE 'N'.
+               88  WS-LATA-FOUND       VALUE 'Y'.
+               88  WS-LATA-NOT-FOUND   VALUE 'N'.
+           05  WS-LATA-USABLE-SW       PIC X(01) VALUE 'Y'.
+               88  WS-LATA-USABLE      VALUE 'Y'.
+           05  WS-ALTERED-SW           PIC X(01) VALUE 'N'.
+               88  WS-ALTERED          VALUE 'Y'.
+       01  WS-COUNTERS.
+           05  WS-ENTRY-CNT            PIC S9(11) COMP-3 VALUE 0.
+           05  WS-RETURN-CNT           PIC S9(11) COMP-3 VALUE 0.
+           05  WS-CARRIED-CNT          PIC S9(11) COMP-3 VALUE 0.
+           05  WS-DERIVED-S            PIC S9(11) COMP-3 VALUE 0.
+           05  WS-DERIVED-I            PIC S9(11) COMP-3 VALUE 0.
+           05  WS-DERIVED-X            PIC S9(11) COMP-3 VALUE 0.
+           05  WS-STRADDLE-CNT         PIC S9(11) COMP-3 VALUE 0.
+           05  WS-DROP-SHORT           PIC S9(11) COMP-3 VALUE 0.
+           05  WS-RDW-MISMATCH         PIC S9(11) COMP-3 VALUE 0.
+      *
+      * THE STRADDLING LATA TABLE.  EACH OF THESE TEN LATAS CROSSES
+      * A STATE BOUNDARY.  THE LIST IS MAINTAINED IN SOURCE AND A
+      * CHANGE NEEDS A RELINK INTO TELCABS.CABS.SORTEXIT.  THE
+      * ENTRIES ARE NOT IN ASCENDING ORDER, SO THE TABLE IS WALKED
+      * WITH SEARCH AND NOT WITH SEARCH ALL.
+       01  WS-STRADDLE-CONST.
+           05  FILLER  PIC X(30) VALUE '220224132236320466482522664938'.
+       01  WS-STRADDLE-TABLE REDEFINES WS-STRADDLE-CONST.
+           05  WS-ST-LATA OCCURS 10 TIMES
+                    INDEXED BY WS-LX          PIC 9(03).
+       01  WS-WORK-FIELDS.
+           05  WS-REC-LEN              PIC S9(04) COMP VALUE 0.
+           05  WS-RDW-LEN              PIC S9(04) COMP VALUE 0.
+           05  WS-MIN-LEN              PIC S9(04) COMP VALUE 108.
+           05  WS-TEST-JURIS           PIC X(01) VALUE SPACE.
+           05  WS-DERIVED-JURIS        PIC X(01) VALUE SPACE.
+           05  WS-BILL-STATE           PIC X(02) VALUE SPACES.
+           05  WS-ORIG-STATE           PIC X(02) VALUE SPACES.
+           05  WS-TERM-STATE           PIC X(02) VALUE SPACES.
+           05  WS-ORIG-LATA            PIC 9(03) VALUE 0.
+           05  WS-TERM-LATA            PIC 9(03) VALUE 0.
+       LINKAGE SECTION.
+       01  LK-PARM-LIST.
+           05  LK-RECORD-PTR           POINTER.
+           05  LK-LENGTH-PTR           POINTER.
+      *
+      * WORD TWO OF THE PARAMETER LIST.  THE FIRST HALFWORD IS THE
+      * LENGTH.  THE SECOND HALFWORD IS RESERVED AND IS NOT READ.
+       01  LK-RECORD-LENGTH.
+           05  LK-RL-HALFWORD          PIC S9(04) COMP.
+           05  LK-RL-RESERVED          PIC S9(04) COMP.
+      *
+      * THE BILL DETAIL RECORD AS IT ARRIVES, RDW FIRST.  ONLY THE
+      * FIXED 108 BYTE FRONT IS PRESENT ON EVERY RECORD - THE TAIL
+      * IS DESCRIBED AT ITS MAXIMUM AND IS NOT REFERENCED HERE.
+       01  LK-BILL-DETAIL.
+           05  LK-BD-RDW.
+               10  LK-BD-REC-LEN       PIC S9(04) COMP.
+               10  LK-BD-RDW-FLAG      PIC X(02).
+           05  LK-BD-REC-TYPE          PIC X(02).
+           05  LK-BD-BAN               PIC X(13).
+           05  LK-BD-CYCLE-YYDDD       PIC 9(05).
+           05  LK-BD-BILL-SECT         PIC X(01).
+           05  LK-BD-OCN               PIC X(04).
+           05  LK-BD-JURIS-CD          PIC X(01).
+               88  LK-BD-INTERSTATE    VALUE 'I'.
+               88  LK-BD-INTRASTATE    VALUE 'S'.
+               88  LK-BD-LOCAL         VALUE 'L'.
+               88  LK-BD-UNRESOLVED    VALUE ' '.
+           05  LK-BD-STATE-CD          PIC X(02).
+           05  LK-BD-RATE-ELEM         PIC X(06).
+           05  LK-BD-USOC              PIC X(05).
+           05  LK-BD-CIRCUIT-ID        PIC X(20).
+           05  LK-BD-A-CLLI            PIC X(11).
+           05  LK-BD-Z-CLLI            PIC X(11).
+           05  LK-BD-ORIG-LATA-X       PIC X(03).
+           05  LK-BD-ORIG-LATA REDEFINES LK-BD-ORIG-LATA-X
+                                       PIC 9(03).
+           05  LK-BD-TERM-LATA-X       PIC X(03).
+           05  LK-BD-TERM-LATA REDEFINES LK-BD-TERM-LATA-X
+                                       PIC 9(03).
+           05  LK-BD-ORIG-STATE        PIC X(02).
+           05  LK-BD-TERM-STATE        PIC X(02).
+           05  LK-BD-QUANTITY          PIC S9(09)V9(02) COMP-3.
+           05  LK-BD-AMOUNT            PIC S9(11)V9(02) COMP-3.
+           05  LK-BD-VARIABLE-TAIL     PIC X(1096).
+      *
+       PROCEDURE DIVISION USING LK-PARM-LIST.
+       P0000-MAINLINE.
+           MOVE ZERO TO RETURN-CODE.
+           MOVE 'N' TO WS-ALTERED-SW.
+           IF WS-FIRST-ENTRY
+               PERFORM P1000-INIT THRU P1000-EXIT
+           END-IF.
+           IF LK-RECORD-PTR = NULL
+               PERFORM P8000-END-OF-INPUT THRU P8000-EXIT
+               GOBACK
+           END-IF.
+           SET ADDRESS OF LK-RECORD-LENGTH TO LK-LENGTH-PTR.
+           SET ADDRESS OF LK-BILL-DETAIL TO LK-RECORD-PTR.
+           ADD 1 TO WS-ENTRY-CNT.
+           PERFORM P2000-CHECK-LENGTH THRU P2000-EXIT.
+           IF RETURN-CODE = 4
+               GOBACK
+           END-IF.
+           PERFORM P3000-TEST-JURIS THRU P3000-EXIT.
+           PERFORM P5000-RETURN-RECORD THRU P5000-EXIT.
+           GOBACK.
+
+       P1000-INIT.
+      * ONLY THE FIRST ENTRY DOES ANY SET UP.
+           MOVE 'N' TO WS-FIRST-ENTRY-SW.
+           DISPLAY 'CABSXJUR ENTERED - JURISDICTION RE-DERIVATION'.
+
+       P1000-EXIT.
+           EXIT.
+
+       P2000-CHECK-LENGTH.
+      * THE LENGTH HALFWORD ADDRESSED BY WORD TWO CARRIES THE WHOLE
+      * RECORD LENGTH WITH THE RDW COUNTED IN IT, AND IS THE VALUE
+      * THE SORT ITSELF WORKS FROM.  ANYTHING UNDER THE MINIMUM ON
+      * THE CARD HAS LOST PART OF THE FIXED FRONT OF THE RECORD AND
+      * ITS SORT KEY WOULD BE TAKEN FROM WHATEVER FOLLOWS IT IN THE
+      * BUFFER, SO THE RECORD IS REMOVED HERE INSTEAD.
+           MOVE LK-RL-HALFWORD TO WS-REC-LEN.
+           MOVE LK-BD-REC-LEN  TO WS-RDW-LEN.
+           IF WS-REC-LEN < WS-MIN-LEN
+               ADD 1 TO WS-DROP-SHORT
+               MOVE 4 TO RETURN-CODE
+               GO TO P2000-EXIT
+           END-IF.
+      * THE RDW CARRIES THE SAME LENGTH.  THE TWO PART COMPANY ON
+      * THE LAST BLOCK OF A CYCLE, WHERE THE FORMATTER PADS IT OUT.
+           IF WS-RDW-LEN < WS-MIN-LEN
+               ADD 1 TO WS-RDW-MISMATCH
+               ADD 1 TO WS-DROP-SHORT
+               MOVE 4 TO RETURN-CODE
+           END-IF.
+
+       P2000-EXIT.
+           EXIT.
+
+       P3000-TEST-JURIS.
+      * A RECORD THAT ALREADY CARRIES A JURISDICTION IS LEFT ALONE.
+      * RATING RESOLVES THE BYTE FOR EVERYTHING IT PRICES, SO THE
+      * ONES THAT REACH HERE BLANK COME FROM THE ADJUSTMENT AND
+      * RESTATEMENT FEEDS.
+           MOVE LK-BD-JURIS-CD TO WS-TEST-JURIS.
+           IF WS-TEST-JURIS NOT = SPACE
+               ADD 1 TO WS-CARRIED-CNT
+               GO TO P3000-EXIT
+           END-IF.
+           PERFORM P4000-DERIVE-JURIS THRU P4000-EXIT.
+           MOVE WS-DERIVED-JURIS TO LK-BD-JURIS-CD.
+           MOVE 'Y' TO WS-ALTERED-SW.
+
+       P3000-EXIT.
+           EXIT.
+
+       P4000-DERIVE-JURIS.
+      * GATHER THE TWO ENDS.  EITHER LATA MAY ARRIVE AS SPACES OR
+      * AS ZEROS WHEN THE CIRCUIT INVENTORY HELD NO ROW FOR THE
+      * CIRCUIT ON THE DAY THE DETAIL WAS CUT.
+           MOVE LK-BD-STATE-CD   TO WS-BILL-STATE.
+           MOVE LK-BD-ORIG-STATE TO WS-ORIG-STATE.
+           MOVE LK-BD-TERM-STATE TO WS-TERM-STATE.
+           MOVE 'Y' TO WS-LATA-USABLE-SW.
+           MOVE ZERO TO WS-ORIG-LATA.
+           MOVE ZERO TO WS-TERM-LATA.
+           IF LK-BD-ORIG-LATA-X IS NUMERIC
+               MOVE LK-BD-ORIG-LATA TO WS-ORIG-LATA
+           ELSE
+               MOVE 'N' TO WS-LATA-USABLE-SW
+           END-IF.
+           IF LK-BD-TERM-LATA-X IS NUMERIC
+               MOVE LK-BD-TERM-LATA TO WS-TERM-LATA
+           ELSE
+               MOVE 'N' TO WS-LATA-USABLE-SW
+           END-IF.
+           IF WS-ORIG-LATA = ZERO OR WS-TERM-LATA = ZERO
+               MOVE 'N' TO WS-LATA-USABLE-SW
+           END-IF.
+      * EITHER END MISSING OR UNKNOWN LEAVES THE CALL
+      * INDETERMINATE.  THE BYTE IS SET TO X AND THE RECORD STAYS
+      * IN THE FILE - THE SUMMARY CARRIES AN X COLUMN.
+           IF NOT WS-LATA-USABLE
+               MOVE 'X' TO WS-DERIVED-JURIS
+               ADD 1 TO WS-DERIVED-X
+               GO TO P4000-EXIT
+           END-IF.
+      * SAME LATA AT BOTH ENDS IS INTRASTATE.  DIFFERENT LATAS
+      * INSIDE ONE STATE ARE ALSO INTRASTATE.  DIFFERENT STATES
+      * MAKE IT INTERSTATE.
+           EVALUATE TRUE
+               WHEN WS-ORIG-LATA = WS-TERM-LATA
+                   MOVE 'S' TO WS-DERIVED-JURIS
+               WHEN WS-ORIG-STATE = WS-TERM-STATE
+                   MOVE 'S' TO WS-DERIVED-JURIS
+               WHEN OTHER
+                   MOVE 'I' TO WS-DERIVED-JURIS
+           END-EVALUATE.
+           PERFORM P4400-STRADDLE-TEST THRU P4400-EXIT.
+           IF WS-DERIVED-JURIS = 'S'
+               ADD 1 TO WS-DERIVED-S
+           ELSE
+               ADD 1 TO WS-DERIVED-I
+           END-IF.
+
+       P4000-EXIT.
+           EXIT.
+
+       P4400-STRADDLE-TEST.
+      * THE 1996 RULING ON THE STRADDLING LATAS.  A CALL WITH ONE
+      * END INSIDE THE BILLED STATE THAT CARRIES ONE OF THE TEN
+      * LATAS IS RATED INTERSTATE EVEN THOUGH BOTH ENDS SIT IN THE
+      * SAME STATE CODE, BECAUSE THE LATA REACHES ACROSS THE LINE.
+           IF WS-DERIVED-JURIS = 'I'
+               GO TO P4400-EXIT
+           END-IF.
+           IF WS-ORIG-STATE NOT = WS-BILL-STATE
+             AND WS-TERM-STATE NOT = WS-BILL-STATE
+               GO TO P4400-EXIT
+           END-IF.
+           MOVE 'N' TO WS-LATA-FOUND-SW.
+           SET WS-LX TO 1.
+           SEARCH WS-ST-LATA
+               AT END
+                   CONTINUE
+               WHEN WS-ST-LATA (WS-LX) = WS-ORIG-LATA
+                   MOVE 'Y' TO WS-LATA-FOUND-SW
+           END-SEARCH.
+           IF WS-LATA-NOT-FOUND
+               SET WS-LX TO 1
+               SEARCH WS-ST-LATA
+                   AT END
+                       CONTINUE
+                   WHEN WS-ST-LATA (WS-LX) = WS-TERM-LATA
+                       MOVE 'Y' TO WS-LATA-FOUND-SW
+               END-SEARCH
+           END-IF.
+           IF WS-LATA-FOUND
+               MOVE 'I' TO WS-DERIVED-JURIS
+               ADD 1 TO WS-STRADDLE-CNT
+           END-IF.
+
+       P4400-EXIT.
+           EXIT.
+
+       P5000-RETURN-RECORD.
+      * ONLY BYTE 30 HAS BEEN TOUCHED, SO THE LENGTH IS UNCHANGED
+      * AND THE HALFWORD ADDRESSED BY WORD TWO IS LEFT AS THE SORT
+      * SET IT.  A RECORD THAT ALREADY CARRIED A JURISDICTION IS
+      * HANDED BACK WITH A REPLY OF ZERO.
+           ADD 1 TO WS-RETURN-CNT.
+           IF WS-ALTERED
+               MOVE 8 TO RETURN-CODE
+           ELSE
+               MOVE ZERO TO RETURN-CODE
+           END-IF.
+
+       P5000-EXIT.
+           EXIT.
+
+       P8000-END-OF-INPUT.
+      * A NULL RECORD ADDRESS MEANS SORTIN IS EXHAUSTED.  THE EXIT
+      * HAS NOTHING TO INSERT, SO IT REPLIES ZERO AND WRITES ITS
+      * TALLIES TO THE MESSAGE DATA SET.  THESE COUNTS ARE THE ONLY
+      * RECORD OF WHAT WAS DERIVED AND WHAT WAS REMOVED - THEY ARE
+      * NOT CARRIED INTO ANY CONTROL RECORD.
+           DISPLAY 'CABSXJUR ENTRIES     ' WS-ENTRY-CNT.
+           DISPLAY 'CABSXJUR RETURNED    ' WS-RETURN-CNT.
+           DISPLAY 'CABSXJUR CARRIED     ' WS-CARRIED-CNT.
+           DISPLAY 'CABSXJUR DERIVED S   ' WS-DERIVED-S.
+           DISPLAY 'CABSXJUR DERIVED I   ' WS-DERIVED-I.
+           DISPLAY 'CABSXJUR DERIVED X   ' WS-DERIVED-X.
+           DISPLAY 'CABSXJUR STRADDLING  ' WS-STRADDLE-CNT.
+           DISPLAY 'CABSXJUR RDW SHORT   ' WS-RDW-MISMATCH.
+           DISPLAY 'CABSXJUR DELETED     ' WS-DROP-SHORT.
+           MOVE ZERO TO RETURN-CODE.
+
+       P8000-EXIT.
+           EXIT.

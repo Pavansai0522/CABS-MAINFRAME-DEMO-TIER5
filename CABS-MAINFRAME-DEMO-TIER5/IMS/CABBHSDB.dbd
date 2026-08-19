@@ -1,0 +1,41 @@
+*****************************************************************
+* CABBHSDB - BILLHIST DATABASE                                  *
+* HISAM ROOT BHSTSEG KEYED BY BAN + BILL PERIOD, WITH DETAIL    *
+* LINE DEPENDENTS.  HOLDS SEVEN YEARS OF RENDERED BILL HISTORY  *
+* FOR CUSTOMER SERVICE LOOKUP.  QUALIFIED BY CABCT04P.  PRIME   *
+* DATASET TELCABS.IMS.BHSTDB, OVERFLOW TELCABS.IMS.BHSTOVF, ON  *
+* THE VSAM GROUP DBDBHST.                                       *
+* REVISION HISTORY                                              *
+*   V1.00  1989-01-30  R.OKAFOR    INITIAL GEN                  *
+*   V1.01  1994-04-18  L.FENNIMORE OVERFLOW DATASET RESIZED      *
+*                                  AFTER THE 1994 RETENTION      *
+*                                  POLICY CHANGE                 *
+*   V1.02  2001-07-09  T.OKONKWO   BHSTSUM SUMMARY SEGMENT       *
+*                                  (ONE-LINE BILL TOTAL FOR THE   *
+*                                  IVR LOOKUP TRANSACTION)        *
+*                                  PLANNED FOR NEXT RELEASE       *
+*                                  UNDER CR-3890                 *
+*   V2.00  2010-02-11  D.WASILEWSKI ADDED BHSTATUS FIELD          *
+*   V2.01  2016-01-25  M.OYELARAN  RECOMPILE ONLY                 *
+*****************************************************************
+         PRINT NOGEN
+CABBHSDB DBD   NAME=CABBHSDB,ACCESS=(HISAM,VSAM)
+*
+DATASET  DD1=BHSTPRI,OVFLW=BHSTOVF,RECORD=(400,400),DEVICE=3390
+*
+* ROOT - ONE PER RENDERED BILL.  BHKEY IS BAN (13) + BILL
+* PERIOD (6).
+*
+SEGM     NAME=BHSTSEG,BYTES=400,PARENT=0,FREQ=1
+FIELD    NAME=(BHKEY,SEQ,U),BYTES=19,START=1,TYPE=C
+FIELD    NAME=BHOCN,BYTES=4,START=20,TYPE=C
+FIELD    NAME=BHSTATUS,BYTES=1,START=100,TYPE=C
+*
+* DETAIL - ONE PER BILLED LINE ITEM ON THAT BILL.
+*
+SEGM     NAME=BHSTDTL,BYTES=300,PARENT=BHSTSEG,FREQ=25
+FIELD    NAME=(BDSEQ,SEQ,U),BYTES=7,START=1,TYPE=C
+*
+DBDGEN
+FINISH
+END

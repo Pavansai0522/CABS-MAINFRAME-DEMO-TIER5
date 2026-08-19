@@ -1,0 +1,317 @@
+/*********************************************************************/
+/* CABFCVAL - PIU/PLU/PSU FACTOR VALIDATION ROUTINE                  */
+/* APPLICATION : CABS                                                */
+/* INPUTS      : FACTIN   TELCABS.CABS.FACTOR.EXTRACT(0)   FB 040    */
+/*               (SORTED ASCENDING ON OCN, STATE, LATA, EFF-YYDDD)   */
+/* OUTPUTS     : EXCPOUT  TELCABS.CABS.FACTOR.EXCEPT(+1)   FB 080    */
+/*             : VALPRT   SYSPRINT - VALIDATION SUMMARY              */
+/* CONTROL     : CTLOUT   TELCABS.CABS.CONTROL(+1)      CABSCTL      */
+/* BALANCE     : FV-READ = FV-PASSED + FV-EXCEPTIONS                 */
+/*               (A RECORD WITH MORE THAN ONE EDIT FAILURE STILL     */
+/*               COUNTS ONCE AGAINST FV-EXCEPTIONS - SEE P-TERM)     */
+/* RESTART     : FULL RERUN - READ ONLY AGAINST THE EXTRACT          */
+/*                                                                    */
+/* VALIDATES THE QUARTERLY PIU/PLU/PSU FACTOR EXTRACT BEFORE IT IS   */
+/* LOADED TO THE FACTOR HISTORY TABLE.  THREE EDITS: EACH FACTOR     */
+/* MUST FALL BETWEEN 0.00000 AND 1.00000 INCLUSIVE; PIU PLUS PLU     */
+/* MUST NOT EXCEED 1.00000 (A CARRIER CANNOT REPORT MORE THAN ALL OF */
+/* ITS TRAFFIC AS BOTH INTERSTATE AND INTRASTATE); AND SUCCESSIVE    */
+/* EFFECTIVE DATES FOR THE SAME OCN/STATE/LATA MUST BE ROUGHLY ONE   */
+/* QUARTER APART, SINCE FACTORS ARRIVE QUARTERLY PER THE COMMENT IN  */
+/* COPYBOOKS/CABSFCTR.CPY.                                            */
+/*                                                                    */
+/* REVISION HISTORY                                                  */
+/*   V1.00  1992-01-27  P.NAIR        INITIAL - RANGE EDIT ONLY      */
+/*   V1.02  1995-05-15  P.NAIR        PIU+PLU CONSISTENCY EDIT ADDED */
+/*   V1.04  2000-10-09  R.OKONKWO     QUARTERLY SEQUENCE EDIT ADDED  */
+/*   V1.06  2008-02-14  A.BUKOWSKI    EXCEPTION RECORD LAYOUT        */
+/*                                    EXPANDED FOR THE NEW FACTOR    */
+/*                                    OPS REVIEW SPREADSHEET IMPORT  */
+/*   V1.07  2019-05-14  M.OYELARAN    RECOMPILE ONLY, OS PL/I V2     */
+/*                                    OPTIMIZING COMPILER            */
+/*********************************************************************/
+CABFCVAL: PROC OPTIONS(MAIN);
+
+   DCL 1 FC_REC,
+         2 FC_OCN         CHAR(4),
+         2 FC_STATE_CD    CHAR(2),
+         2 FC_LATA        PIC '999',
+         2 FC_EFF_YYDDD   PIC '99999',
+         2 FC_PIU         FIXED DEC(8,5),
+         2 FC_PLU         FIXED DEC(8,5),
+         2 FC_PSU         FIXED DEC(8,5),
+         2 FC_SOURCE      CHAR(1),
+         2 FC_FILLER      CHAR(19);
+
+   DCL FACTIN FILE RECORD INPUT SEQUENTIAL
+       ENV(FB RECSIZE(40) BLKSIZE(4000));
+
+   DCL 1 EX_REC,
+         2 EX_OCN          CHAR(4),
+         2 EX_STATE_CD     CHAR(2),
+         2 EX_LATA         PIC '999',
+         2 EX_EFF_YYDDD    PIC '99999',
+         2 EX_REASON_CD    CHAR(4),
+         2 EX_PIU_RPT      PIC '9V999',
+         2 EX_PLU_RPT      PIC '9V999',
+         2 EX_PSU_RPT      PIC '9V999',
+         2 EX_REASON_TEXT  CHAR(53);
+
+   DCL EXCPOUT FILE RECORD OUTPUT SEQUENTIAL
+       ENV(FB RECSIZE(80) BLKSIZE(8000));
+
+   DCL 1 CTL_REC,
+         2 CT_RUN_ID        CHAR(12),
+         2 CT_PROCESS_ID    CHAR(8),
+         2 CT_STEP_SEQ      PIC '999',
+         2 CT_CYCLE_YYDDD   PIC '99999',
+         2 CT_BILL_PERIOD   PIC '999999',
+         2 CT_RERUN_NBR     PIC '99',
+         2 CT_JOBNAME       CHAR(8),
+         2 CT_STEPNAME      CHAR(8),
+         2 CT_READ          FIXED DEC(11),
+         2 CT_WRITTEN       FIXED DEC(11),
+         2 CT_REJECTED      FIXED DEC(11),
+         2 CT_SUMMARISED    FIXED DEC(11),
+         2 CT_CARRIED_FWD   FIXED DEC(11),
+         2 CT_FILLER        CHAR(115);
+
+   DCL CTLOUT FILE RECORD OUTPUT SEQUENTIAL
+       ENV(FB RECSIZE(180) BLKSIZE(18000));
+
+   DCL VALPRT FILE STREAM OUTPUT PRINT;
+
+   DCL EOF_SW BIT(1) INIT('0'B);
+
+   DCL WS_READ_CNT       FIXED DEC(11) INIT(0);
+   DCL WS_PASSED_CNT     FIXED DEC(11) INIT(0);
+   DCL WS_EXCEPTION_CNT  FIXED DEC(11) INIT(0);
+   DCL WS_RANGE_FAIL_CNT FIXED DEC(9)  INIT(0);
+   DCL WS_CONS_FAIL_CNT  FIXED DEC(9)  INIT(0);
+   DCL WS_SEQ_FAIL_CNT   FIXED DEC(9)  INIT(0);
+
+   DCL WS_PRIOR_KEY      CHAR(9) INIT(' ');
+   DCL WS_PRIOR_EFF      PIC '99999' INIT(0);
+   DCL WS_THIS_KEY       CHAR(9);
+
+   DCL WS_ANY_FAIL       BIT(1);
+   DCL WS_REASON_TEXT    CHAR(53);
+   DCL WS_REASON_CD      CHAR(4);
+
+   DCL WS_LINE_CNT  FIXED DEC(5) INIT(99);
+   DCL WS_PAGE_NBR  FIXED DEC(5) INIT(0);
+
+   DCL (SUBSTR, ROUND) BUILTIN;
+
+   ON ENDFILE(FACTIN) EOF_SW = '1'B;
+
+   CALL P_INIT;
+   DO WHILE (EOF_SW = '0'B);
+      CALL P_READ_FACTOR;
+      IF EOF_SW = '0'B THEN
+         CALL P_VALIDATE_ONE;
+   END;
+   CALL P_TERM;
+
+   /*==============================================================*/
+   P_INIT: PROC;
+      OPEN FILE(FACTIN);
+      OPEN FILE(EXCPOUT) OUTPUT;
+      OPEN FILE(CTLOUT) OUTPUT;
+      OPEN FILE(VALPRT) OUTPUT LINESIZE(132) PAGESIZE(60);
+      CALL P_HEADING;
+   END P_INIT;
+
+   /*==============================================================*/
+   P_READ_FACTOR: PROC;
+      READ FILE(FACTIN) INTO(FC_REC);
+      IF EOF_SW = '0'B THEN
+         WS_READ_CNT = WS_READ_CNT + 1;
+   END P_READ_FACTOR;
+
+   /*==============================================================*/
+   /* A RECORD CAN FAIL MORE THAN ONE EDIT.  ALL THREE EDITS RUN    */
+   /* REGARDLESS OF AN EARLIER FAILURE SO THE EXCEPTION FILE SHOWS  */
+   /* EVERY PROBLEM WITH A RECORD IN ONE PASS RATHER THAN MAKING    */
+   /* FACTOR OPERATIONS FIX ONE EDIT AND RERUN TO FIND THE NEXT.    */
+   /*==============================================================*/
+   P_VALIDATE_ONE: PROC;
+      WS_ANY_FAIL = '0'B;
+      WS_REASON_TEXT = ' ';
+      WS_REASON_CD = ' ';
+
+      CALL P_EDIT_RANGE;
+      CALL P_EDIT_CONSISTENCY;
+      CALL P_EDIT_SEQUENCE;
+
+      IF WS_ANY_FAIL THEN DO;
+         WS_EXCEPTION_CNT = WS_EXCEPTION_CNT + 1;
+         CALL P_WRITE_EXCEPTION;
+      END;
+      ELSE
+         WS_PASSED_CNT = WS_PASSED_CNT + 1;
+
+      WS_THIS_KEY = FC_OCN || FC_STATE_CD || SUBSTR(FC_LATA,1,3);
+      IF WS_THIS_KEY = WS_PRIOR_KEY THEN
+         WS_PRIOR_EFF = FC_EFF_YYDDD;
+      ELSE DO;
+         WS_PRIOR_KEY = WS_THIS_KEY;
+         WS_PRIOR_EFF = FC_EFF_YYDDD;
+      END;
+   END P_VALIDATE_ONE;
+
+   /*==============================================================*/
+   /* RANGE EDIT.  VALIDATED AGAINST THE FULL FIVE-DECIMAL FACTOR   */
+   /* VALUE, AS CARRIED ON COPYBOOKS/CABSFCTR.CPY.  0.00000 AND     */
+   /* 1.00000 ARE BOTH VALID - A FACTOR OF EXACTLY ZERO MEANS THE   */
+   /* CARRIER REPORTED NO TRAFFIC IN THAT JURISDICTION FOR THE      */
+   /* QUARTER, WHICH IS LEGITIMATE.                                  */
+   /*==============================================================*/
+   P_EDIT_RANGE: PROC;
+      IF FC_PIU < 0 | FC_PIU > 1 THEN DO;
+         WS_ANY_FAIL = '1'B;
+         WS_RANGE_FAIL_CNT = WS_RANGE_FAIL_CNT + 1;
+         WS_REASON_CD = 'RNG1';
+         WS_REASON_TEXT = 'PIU OUT OF RANGE 0.00000 TO 1.00000';
+      END;
+      IF FC_PLU < 0 | FC_PLU > 1 THEN DO;
+         WS_ANY_FAIL = '1'B;
+         WS_RANGE_FAIL_CNT = WS_RANGE_FAIL_CNT + 1;
+         WS_REASON_CD = 'RNG2';
+         WS_REASON_TEXT = 'PLU OUT OF RANGE 0.00000 TO 1.00000';
+      END;
+      IF FC_PSU < 0 | FC_PSU > 1 THEN DO;
+         WS_ANY_FAIL = '1'B;
+         WS_RANGE_FAIL_CNT = WS_RANGE_FAIL_CNT + 1;
+         WS_REASON_CD = 'RNG3';
+         WS_REASON_TEXT = 'PSU OUT OF RANGE 0.00000 TO 1.00000';
+      END;
+   END P_EDIT_RANGE;
+
+   /*==============================================================*/
+   P_EDIT_CONSISTENCY: PROC;
+      IF (FC_PIU + FC_PLU) > 1 THEN DO;
+         WS_ANY_FAIL = '1'B;
+         WS_CONS_FAIL_CNT = WS_CONS_FAIL_CNT + 1;
+         WS_REASON_CD = 'CON1';
+         WS_REASON_TEXT = 'PIU PLUS PLU EXCEEDS 1.00000';
+      END;
+   END P_EDIT_CONSISTENCY;
+
+   /*==============================================================*/
+   /* QUARTERLY SEQUENCE EDIT.  ONLY CHECKED WHEN THE CURRENT       */
+   /* RECORD'S OCN/STATE/LATA MATCHES THE PRIOR RECORD READ - THE   */
+   /* EXTRACT IS SORTED SO THIS IS THE SAME GROUP.  THE GAP IS      */
+   /* APPROXIMATED AS YY*365+DDD ARITHMETIC, WHICH IS ADEQUATE FOR  */
+   /* A ROUGHLY-ONE-QUARTER TOLERANCE CHECK AND DOES NOT NEED TRUE  */
+   /* CALENDAR PRECISION - SEE CABDTCNV FOR THE ESTATE'S EXACT      */
+   /* GREGORIAN CONVERSION WHEN THAT LEVEL OF PRECISION IS NEEDED.  */
+   /*==============================================================*/
+   P_EDIT_SEQUENCE: PROC;
+      DCL WS_GAP_DAYS FIXED DEC(6);
+      DCL WS_THIS_KEY_L CHAR(9);
+
+      WS_THIS_KEY_L = FC_OCN || FC_STATE_CD || SUBSTR(FC_LATA,1,3);
+      IF WS_THIS_KEY_L ^= WS_PRIOR_KEY THEN
+         RETURN;                    /* FIRST RECORD FOR THIS GROUP */
+
+      WS_GAP_DAYS = P_YYDDD_DAYS(FC_EFF_YYDDD) - P_YYDDD_DAYS(WS_PRIOR_EFF);
+
+      IF WS_GAP_DAYS < 80 | WS_GAP_DAYS > 100 THEN DO;
+         WS_ANY_FAIL = '1'B;
+         WS_SEQ_FAIL_CNT = WS_SEQ_FAIL_CNT + 1;
+         WS_REASON_CD = 'SEQ1';
+         WS_REASON_TEXT = 'EFFECTIVE DATE GAP NOT ONE QUARTER';
+      END;
+   END P_EDIT_SEQUENCE;
+
+   /*==============================================================*/
+   P_YYDDD_DAYS: PROC(P_YYDDD) RETURNS(FIXED DEC(8));
+      DCL P_YYDDD PIC '99999';
+      DCL P_YY FIXED DEC(2);
+      DCL P_DDD FIXED DEC(3);
+      P_YY  = SUBSTR(P_YYDDD,1,2);
+      P_DDD = SUBSTR(P_YYDDD,3,3);
+      RETURN (P_YY * 365 + P_DDD);
+   END P_YYDDD_DAYS;
+
+   /*==============================================================*/
+   /* THE EXCEPTION RECORD REPORTS THE FACTOR TO THREE DECIMALS     */
+   /* (PIC '9V999') EVEN THOUGH THE EDITS ABOVE VALIDATE AT FIVE.   */
+   /* THIS MATCHES THE FACTOR OPS REVIEW SPREADSHEET IMPORT FORMAT, */
+   /* WHICH HAS CARRIED THREE DECIMAL PLACES SINCE IT WAS BUILT.    */
+   /*==============================================================*/
+   P_WRITE_EXCEPTION: PROC;
+      EX_OCN         = FC_OCN;
+      EX_STATE_CD    = FC_STATE_CD;
+      EX_LATA        = FC_LATA;
+      EX_EFF_YYDDD   = FC_EFF_YYDDD;
+      EX_REASON_CD   = WS_REASON_CD;
+      EX_PIU_RPT     = ROUND(FC_PIU,3);
+      EX_PLU_RPT     = ROUND(FC_PLU,3);
+      EX_PSU_RPT     = ROUND(FC_PSU,3);
+      EX_REASON_TEXT = WS_REASON_TEXT;
+      WRITE FILE(EXCPOUT) FROM(EX_REC);
+
+      IF WS_LINE_CNT >= 55 THEN
+         CALL P_HEADING;
+      PUT FILE(VALPRT) EDIT(
+         FC_OCN, FC_STATE_CD, FC_LATA, FC_EFF_YYDDD, WS_REASON_CD,
+         WS_REASON_TEXT)
+         (SKIP, X(2), A(4), X(1), A(2), X(1), F(3), X(1), F(5), X(2),
+          A(4), X(2), A);
+      WS_LINE_CNT = WS_LINE_CNT + 1;
+   END P_WRITE_EXCEPTION;
+
+   /*==============================================================*/
+   P_HEADING: PROC;
+      WS_PAGE_NBR = WS_PAGE_NBR + 1;
+      PUT FILE(VALPRT) PAGE;
+      PUT FILE(VALPRT) EDIT(
+         'CABFCVAL - FACTOR VALIDATION EXCEPTIONS', 'PAGE', WS_PAGE_NBR)
+         (SKIP, A, COLUMN(90), A, F(5));
+      PUT FILE(VALPRT) EDIT(
+         'OCN  ST LATA EFF-YYDDD CODE REASON')
+         (SKIP(2), A);
+      WS_LINE_CNT = 4;
+   END P_HEADING;
+
+   /*==============================================================*/
+   P_TERM: PROC;
+      PUT FILE(VALPRT) EDIT('CONTROL TOTALS')(SKIP(3), A);
+      PUT FILE(VALPRT) EDIT(
+         'RECORDS READ          :', WS_READ_CNT)(SKIP, A, F(9));
+      PUT FILE(VALPRT) EDIT(
+         'RECORDS PASSED        :', WS_PASSED_CNT)(SKIP, A, F(9));
+      PUT FILE(VALPRT) EDIT(
+         'RECORDS WITH EXCEPTION:', WS_EXCEPTION_CNT)(SKIP, A, F(9));
+      PUT FILE(VALPRT) EDIT(
+         '  RANGE FAILURES      :', WS_RANGE_FAIL_CNT)(SKIP, A, F(9));
+      PUT FILE(VALPRT) EDIT(
+         '  CONSISTENCY FAILURES:', WS_CONS_FAIL_CNT)(SKIP, A, F(9));
+      PUT FILE(VALPRT) EDIT(
+         '  SEQUENCE FAILURES   :', WS_SEQ_FAIL_CNT)(SKIP, A, F(9));
+
+      CT_RUN_ID      = 'FCVALRUN001 ';
+      CT_PROCESS_ID  = 'CABFCVAL';
+      CT_STEP_SEQ    = 10;
+      CT_CYCLE_YYDDD = 0;
+      CT_BILL_PERIOD = 0;
+      CT_RERUN_NBR   = 0;
+      CT_JOBNAME     = 'CABP0420';
+      CT_STEPNAME    = 'STEP010';
+      CT_READ        = WS_READ_CNT;
+      CT_WRITTEN     = WS_PASSED_CNT;
+      CT_REJECTED    = WS_EXCEPTION_CNT;
+      CT_SUMMARISED  = 0;
+      CT_CARRIED_FWD = 0;
+      CT_FILLER      = ' ';
+      WRITE FILE(CTLOUT) FROM(CTL_REC);
+
+      CLOSE FILE(FACTIN);
+      CLOSE FILE(EXCPOUT);
+      CLOSE FILE(CTLOUT);
+      CLOSE FILE(VALPRT);
+   END P_TERM;
+
+END CABFCVAL;

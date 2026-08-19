@@ -1,0 +1,18 @@
+*****************************************************************
+* CABCT05P - PSB FOR CABCT05 (SETTLEMENT DATABASE LOAD)         *
+* SENSITIVE TO SETLSEG AND SETLDTL, PROCESSED IN ROOT (HDAM)    *
+* ORDER - NO PROCSEQ.  THIS IS THE PRIMARY LOAD PATH THAT       *
+* ADDS NEW SETTLEMENT TRANSACTIONS.  PROCOPT=A.                 *
+* REVISION HISTORY                                              *
+*   V1.00  1991-03-04  R.OKAFOR    INITIAL GEN                  *
+*   V1.01  2009-10-05  D.WASILEWSKI RECOMPILE AFTER STDISPSW     *
+*                                  FIELD ADDED TO CABSETDB        *
+*****************************************************************
+         PRINT NOGEN
+*
+         PCB   TYPE=DB,DBDNAME=CABSETDB,KEYLEN=29,PROCOPT=A
+         SENSEG NAME=SETLSEG,PARENT=0
+         SENSEG NAME=SETLDTL,PARENT=SETLSEG
+*
+         PSBGEN LANG=COBOL,PSBNAME=CABCT05P,CMPAT=YES
+         END

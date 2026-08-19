@@ -1,0 +1,768 @@
+      *****************************************************************
+      * CABRAT05 - UNBUNDLED NETWORK ELEMENT (UNE) RATING             *
+      * APPLICATION : CABS                                            *
+      * INPUTS      : DDNAME  DSN                          COPYBOOK   *
+      *               UNEIN   TELCABS.CABS.USAGE.CLEAN(0)  CABSCDR    *
+      *               RATEMST TELCABS.CABS.RATE (VSAM KSDS) CABSRATE  *
+      * OUTPUTS     : DDNAME  DSN                          COPYBOOK   *
+      *               RATOUT  TELCABS.CABS.RATED(+1)        (LOCAL)   *
+      *               BDTLOUT TELCABS.CABS.BILLDTL(+1)      CABSBILL  *
+      *               SUSOUT  TELCABS.CABS.USAGE.SUSPENSE(+1)CABSERR  *
+      *               RPTOUT  SYSOUT CLASS A                CABSPRNT  *
+      * CONTROL     : CTLOUT                               CABSCTL    *
+      * BALANCE     : CT-READ = CT-WRITTEN + CT-REJECTED +             *
+      *               CT-SUMMARISED + CT-CARRIED-FWD                  *
+      * RESTART     : FULL RERUN                                      *
+      * REVISION HISTORY                                              *
+      *   V1.00  1997-05-12  D.OKONKWO    INITIAL RELEASE - LOOP AND  *
+      *                      PORT ELEMENTS ONLY, FLAT NATIONAL RATE   *
+      *   V1.02  1999-11-03  J.M.CASTILLO TRANSPORT ELEMENT ADDED     *
+      *   V1.04  2001-06-20  P.NAIR       COLLOCATION CROSS-CONNECT   *
+      *                      ELEMENT ADDED                            *
+      *   V1.06  2003-08-15  A.BUKOWSKI   CONVERTED TO STATE-SPECIFIC *
+      *                      TELRIC RATES PER FCC TRIENNIAL REVIEW    *
+      *                      ORDER - NATIONAL FLAT RATE RETIRED       *
+      *   V1.08  2008-01-30  S.MARCHETTI  NON-RECURRING INSTALLATION  *
+      *                      CHARGE ADDED FOR MID-CYCLE INSTALLS      *
+      *   V1.10  2013-09-18  K.ADEYEMI    REVISED TELRIC SCHEDULE     *
+      *                      REPRICE ADDED FOR LOOP ELEMENTS PER      *
+      *                      STATE COMMISSION TRUE-UP ORDER           *
+      *   V1.11  2019-02-22  G.PRZYBYLSKI RECOMPILE ONLY - CABSRT04   *
+      *                      FIELD WIDTH CHANGE                       *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CABRAT05.
+       AUTHOR. TELCABS APPLICATIONS - RATING TEAM.
+      *****************************************************************
+      * UNE RATING IS ELEMENT-BASED - UNBUNDLED LOOP (2-WIRE/4-WIRE   *
+      * BY USOC), UNBUNDLED PORT, UNBUNDLED TRANSPORT, AND            *
+      * COLLOCATION CROSS-CONNECT, EACH WITH A STATE-SPECIFIC TELRIC  *
+      * RATE FROM RATEMST.  UNE RATES ARE STATE-COMMISSION-SET, SO    *
+      * THE STATE LOOKUP MUST BE EXACT - THERE IS NO JURIS-GENERIC    *
+      * FALLBACK HERE, UNLIKE SWITCHED OR SPECIAL ACCESS.  A STATE    *
+      * NOT FOUND ON RATEMST IS ALWAYS SUSPENDED, NEVER DEFAULTED.    *
+      * CD-REC-TYPE '07' HAS NO DEDICATED VARIANT IN THE FROZEN       *
+      * CABSCDR LAYOUT, SO THIS PROGRAM REUSES CD-SPCL-DETAIL FOR THE *
+      * CIRCUIT ID, USOC AND QUANTITY FIELDS - THE BYTE LAYOUT IS     *
+      * GENERIC ENOUGH TO CARRY BOTH.  COPIES CABSRT01 LIKE EVERY     *
+      * OTHER RATING PROGRAM; ONLY R4-ROUND-WORK IS USED.             *
+      *****************************************************************
+       ENVIRONMENT DIVISION.
+       CONFIGURATION SECTION.
+       SOURCE-COMPUTER. IBM-370.
+       OBJECT-COMPUTER. IBM-370.
+       SPECIAL-NAMES.
+           C01 IS TO-NEW-PAGE.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT UNEIN ASSIGN TO UT-S-UNEIN
+               ORGANIZATION IS SEQUENTIAL
+               ACCESS MODE IS SEQUENTIAL
+               FILE STATUS IS WS-FS-INPUT.
+           SELECT RATEMST ASSIGN TO DA-RATEMST
+               ORGANIZATION IS INDEXED
+               ACCESS MODE IS DYNAMIC
+               RECORD KEY IS RT-KEY
+               FILE STATUS IS WS-FS-TABLE.
+           SELECT RATOUT ASSIGN TO UT-S-RATOUT
+               ORGANIZATION IS SEQUENTIAL
+               ACCESS MODE IS SEQUENTIAL
+               FILE STATUS IS WS-FS-OUTPUT.
+           SELECT BDTLOUT ASSIGN TO UT-S-BDTLOUT
+               ORGANIZATION IS SEQUENTIAL
+               ACCESS MODE IS SEQUENTIAL
+               FILE STATUS IS WS-FS-OUTPUT.
+           SELECT SUSOUT ASSIGN TO UT-S-SUSOUT
+               ORGANIZATION IS SEQUENTIAL
+               ACCESS MODE IS SEQUENTIAL
+               FILE STATUS IS WS-FS-SUSPENSE.
+           SELECT CTLOUT ASSIGN TO UT-S-CTLOUT
+               ORGANIZATION IS SEQUENTIAL
+               ACCESS MODE IS SEQUENTIAL
+               FILE STATUS IS WS-FS-CONTROL.
+           SELECT RPTOUT ASSIGN TO UT-S-RPTOUT
+               ORGANIZATION IS SEQUENTIAL
+               ACCESS MODE IS SEQUENTIAL
+               FILE STATUS IS WS-FS-OUTPUT.
+       DATA DIVISION.
+       FILE SECTION.
+      * UNEIN - UNBUNDLED NETWORK ELEMENT USAGE, RECORD TYPE 07 ONLY.
+       FD  UNEIN
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 200 CHARACTERS.
+       COPY CABSCDR.
+      * RATEMST - ACCESS RATE TABLE, VSAM KSDS, ONE EXACT LOOKUP.
+       FD  RATEMST
+           LABEL RECORDS ARE STANDARD.
+       COPY CABSRATE.
+      * RATOUT - RATED UNE PASS-THROUGH, ONE PER CDR.
+       FD  RATOUT
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 200 CHARACTERS.
+       01  CABS-RATOUT-RECORD.
+           05  RO-OCN                      PIC X(04).
+           05  RO-BAN                      PIC X(13).
+           05  RO-SEQ-NBR                  PIC 9(09) COMP-3.
+           05  RO-CIRCUIT-ID               PIC X(20).
+           05  RO-ELEM                     PIC X(06).
+           05  RO-ELEM-CLASS               PIC X(01).
+           05  RO-RATE-STATUS              PIC X(01).
+               88  RO-RATED                VALUE 'R'.
+               88  RO-SUSPENDED             VALUE 'S'.
+           05  RO-CYCLE-YYDDD              PIC 9(05).
+           05  RO-STATE-CD                 PIC X(02).
+           05  RO-MRC-AMOUNT               PIC S9(11)V9(05) COMP-3.
+           05  RO-NRC-AMOUNT               PIC S9(11)V9(05) COMP-3.
+           05  RO-TOT-AMOUNT               PIC S9(11)V9(05) COMP-3.
+           05  RO-FILLER                   PIC X(112).
+      * BDTLOUT - BILL DETAIL, ONE ELEMENT PER UNE CDR.
+       FD  BDTLOUT
+           RECORDING MODE IS V
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD IS VARYING IN SIZE FROM 108 TO 1647 CHARACTERS
+               DEPENDING ON BD-ELEM-CNT.
+       COPY CABSBILL.
+      * SUSOUT - REJECTED / SUSPENDED USAGE.
+       FD  SUSOUT
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 300 CHARACTERS.
+       01  CABS-SUSPENSE-RECORD-FD.
+           05  FD-SU-ERR-CODE              PIC X(04).
+           05  FD-SU-ERR-SEVERITY          PIC X(01).
+           05  FD-SU-DETECT-PGM            PIC X(08).
+           05  FD-SU-DETECT-PARA           PIC X(30).
+           05  FD-SU-RUN-ID                PIC X(12).
+           05  FD-SU-ORIG-RECORD           PIC X(200).
+           05  FD-SU-FILLER                PIC X(45).
+      * CTLOUT - RUN CONTROL / BALANCING RECORD.
+       FD  CTLOUT
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 180 CHARACTERS.
+       01  CABS-CTLOUT-RECORD              PIC X(180).
+      * RPTOUT - EXCEPTION AND CONTROL SUMMARY REPORT.
+       FD  RPTOUT
+           RECORDING MODE IS FA
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 133 CHARACTERS.
+       COPY CABSPRNT.
+       WORKING-STORAGE SECTION.
+      * STANDARD SHARED WORKING STORAGE.  SEE CABSWRK.
+       COPY CABSWRK.
+      * CIRCUIT MASTER RECORD LAYOUT - CIRCMST IS NOT OPENED BY THIS
+      * PROGRAM.  CABCIRCL OWNS THE VSAM ACCESS.
+       COPY CABSCIRC.
+      * RATING FAMILY CONTROL BLOCKS - EVERY RATING PROGRAM COPIES
+      * THIS EVEN WHEN, AS HERE, ONLY R4-ROUND-WORK IS USED.
+       COPY CABSRT01.
+       01  WS-PROGRAM-CONSTANTS.
+           05  WS-PGM-NAME                 PIC X(08) VALUE 'CABRAT05'.
+           05  WS-PGM-VERSION              PIC X(05) VALUE 'V1.11'.
+           05  WS-DEFAULT-TARIFF           PIC X(04) VALUE 'UNE1'.
+           05  WS-REVISED-TARIFF           PIC X(04) VALUE 'UNE2'.
+           05  WS-DEFAULT-JURIS            PIC X(01) VALUE 'S'.
+      * SYSIN PARM CARD.
+       01  WS-PARM-CARD                    PIC X(80).
+       01  WS-PARM-CARD-R1 REDEFINES WS-PARM-CARD.
+           05  PC1-CYCLE-YYDDD              PIC 9(05).
+           05  PC1-CYCLE-DAYS               PIC 9(02).
+           05  PC1-BILL-PERIOD              PIC 9(06).
+           05  PC1-TARIFF-CD                PIC X(04).
+           05  PC1-RUN-ID                   PIC X(12).
+           05  PC1-FILLER                   PIC X(51).
+       01  WS-CYCLE-RANGE-WORK.
+           05  WS-CYC-START-YYDDD          PIC 9(05) VALUE 0.
+           05  WS-CYC-START-DDD REDEFINES WS-CYC-START-YYDDD.
+               10  WS-CYS-YY                PIC 9(02).
+               10  WS-CYS-DDD               PIC 9(03).
+           05  WS-CYC-END-DDD              PIC 9(03) VALUE 0.
+           05  WS-CYC-TOTAL-DAYS           PIC S9(03) COMP-3 VALUE 0.
+       01  WS-DATE-COMPONENT-WORK.
+           05  WS-DC-INSTALL-YYDDD          PIC 9(05) VALUE 0.
+           05  WS-DC-INSTALL-R REDEFINES WS-DC-INSTALL-YYDDD.
+               10  WS-DC-INSTALL-YY          PIC 9(02).
+               10  WS-DC-INSTALL-DDD         PIC 9(03).
+      * USOC-TO-ELEMENT CROSS-REFERENCE - EMBEDDED LITERAL, FORMAT
+      * PER ENTRY USOC(5) ELEM(6) CLASS(1) = 12 BYTES.  CLASS 'L' IS
+      * LOOP (2-WIRE OR 4-WIRE), 'P' PORT, 'T' TRANSPORT, 'X' XCONN.
+       01  WS-USOC-SEED.
+           05  FILLER PIC X(60) VALUE
+               'UBL2WUNL2W LUBL4WUNL4W LUNPRTUNPRT PUNTRNUNTRN T'
+      -        'UNXCNUNXCN X'.
+       01  WS-USOC-SEED-R REDEFINES WS-USOC-SEED.
+           05  WS-US-SEED-ENTRY OCCURS 5 TIMES.
+               10  WS-US-USOC               PIC X(05).
+               10  WS-US-ELEM               PIC X(06).
+               10  WS-US-CLASS              PIC X(01).
+       01  WS-USOC-XREF-WORK.
+           05  WS-UX-SUB                    PIC S9(02) COMP-3 VALUE 0.
+           05  WS-UX-FOUND-SW               PIC X(01) VALUE 'N'.
+               88  WS-UX-FOUND              VALUE 'Y'.
+           05  WS-UX-SEL-CLASS              PIC X(01) VALUE SPACES.
+               88  WS-EC-LOOP-CLASS         VALUE 'L'.
+       01  WS-CIRCUIT-LOOKUP-WORK.
+           05  WS-CL-FOUND-SW               PIC X(01) VALUE 'N'.
+               88  WS-CL-FOUND              VALUE 'Y'.
+      * RATE LOOKUP WORK - A SINGLE EXACT-STATE ATTEMPT, NO FALLBACK.
+       01  WS-RATE-KEY-WORK.
+           05  WS-RK-ELEM                   PIC X(06).
+       01  WS-RATE-RESULT-WORK.
+           05  WS-RR-FOUND-SW               PIC X(01) VALUE 'N'.
+               88  WS-RR-FOUND              VALUE 'Y'.
+           05  WS-SEL-MRC-RATE              PIC S9(05)V9(05) COMP-3
+                                                             VALUE 0.
+           05  WS-SEL-SETUP-CHG             PIC S9(07)V9(05) COMP-3
+                                                             VALUE 0.
+           05  WS-SEL-ROUND-RULE            PIC X(01).
+           05  WS-SEL-ROUND-POS             PIC 9(01).
+      * AMOUNT WORK - MRC AND NRC ARE KEPT SEPARATE SO RATOUT CAN
+      * REPORT THEM INDIVIDUALLY BEFORE THEY ARE SUMMED AND ROUNDED.
+       01  WS-AMOUNT-WORK.
+           05  WS-AM-MRC-AMOUNT             PIC S9(11)V9(05) COMP-3
+                                                             VALUE 0.
+           05  WS-AM-NRC-AMOUNT             PIC S9(11)V9(05) COMP-3
+                                                             VALUE 0.
+           05  WS-AM-TOTAL-AMOUNT           PIC S9(11)V9(05) COMP-3
+                                                             VALUE 0.
+      * LOOP REPRICE WORK - THE SWITCH IS SET AT INIT FROM THE
+      * TELRIC REPRICE CONTROL CARD SUPPLIED BY THE TARIFF GROUP.
+       01  WS-LOOP-REPRICE-WORK.
+           05  WS-LOOP-REPRICE-SW           PIC X(01) VALUE 'N'.
+               88  WS-LOOP-REPRICE-ON       VALUE 'Y'.
+           05  WS-REPRICE-FOUND-SW          PIC X(01) VALUE 'N'.
+               88  WS-REPRICE-FOUND         VALUE 'Y'.
+           05  WS-REPRICE-NEW-RATE          PIC S9(05)V9(05) COMP-3
+                                                             VALUE 0.
+           05  WS-REPRICE-DELTA             PIC S9(11)V9(05) COMP-3
+                                                             VALUE 0.
+      * VALIDATION SWITCH - CARRIES A SINGLE RECORD THROUGH EACH
+      * CHECK.  ONCE 'N', NO FURTHER RATING STEP RUNS FOR THIS CDR.
+       01  WS-VALIDATION-WORK.
+           05  WS-VALID-SW                  PIC X(01) VALUE 'Y'.
+               88  WS-RECORD-VALID          VALUE 'Y'.
+           05  WS-CURRENT-ERR-CODE          PIC X(04) VALUE SPACES.
+      * BILL DESCRIPTION FRAGMENTS - ASSEMBLED VIA STRING.
+       01  WS-DESC-WORK.
+           05  WS-DESC-USOC                 PIC X(05).
+           05  WS-DESC-ASSEMBLED            PIC X(60).
+       01  WS-ABEND-WORK.
+           05  WS-AB-PGM                    PIC X(08).
+           05  WS-AB-PARA                   PIC X(30).
+           05  WS-AB-REASON                 PIC X(60).
+           05  WS-AB-USER-CODE              PIC 9(04) VALUE 9905.
+       01  WS-EXT-CALL-RC.
+           05  WS-RC-ERRWR                  PIC 9(04) VALUE 0.
+           05  WS-RC-HASH                   PIC 9(04) VALUE 0.
+           05  WS-RC-CIRCL                  PIC 9(04) VALUE 0.
+           05  WS-RC-ABEND                  PIC 9(04) VALUE 0.
+       01  WS-HASH-WORK.
+           05  WS-HW-OCN                    PIC S9(15) COMP-3 VALUE 0.
+           05  WS-HW-SEQ                    PIC S9(17) COMP-3 VALUE 0.
+           05  WS-HW-MINUTES                PIC S9(15)V9(02) COMP-3
+                                                             VALUE 0.
+           05  WS-HW-AMOUNT                 PIC S9(13)V9(05) COMP-3
+                                                             VALUE 0.
+       01  WS-ROUND-DISPATCH-WORK.
+           05  WS-RD-RULE-INDEX             PIC 9(01) VALUE 0.
+       01  WS-REPORT-WORK.
+           05  WS-RPT-PAGE-NBR              PIC S9(03) COMP-3 VALUE 0.
+           05  WS-RPT-TITLE1                 PIC X(60) VALUE
+               'CABRAT05 - UNBUNDLED NETWORK ELEMENT (UNE) RATING'.
+       01  WS-MISC-COUNTERS.
+           05  WS-MC-CIRCUIT-NOT-FOUND       PIC S9(07) COMP-3
+                                                             VALUE 0.
+           05  WS-MC-RATE-NOT-FOUND          PIC S9(07) COMP-3
+                                                             VALUE 0.
+           05  WS-MC-NRC-APPLIED-CNT         PIC S9(07) COMP-3
+                                                             VALUE 0.
+           05  WS-MC-LOOP-REPRICED-CNT       PIC S9(07) COMP-3
+                                                             VALUE 0.
+       PROCEDURE DIVISION.
+      * P0000-MAINLINE - MANDATORY CABS BATCH SHAPE.
+       P0000-MAINLINE.
+           PERFORM P1000-INIT THRU P1000-EXIT.
+           PERFORM P2000-PROCESS THRU P2000-EXIT UNTIL WS-EOF.
+           PERFORM P8000-CONTROL THRU P8000-EXIT.
+           PERFORM P9000-TERM THRU P9000-EXIT.
+           STOP RUN.
+      * S100-INITIALISATION SECTION
+       S100-INITIALISATION SECTION.
+       P1000-INIT.
+           PERFORM P1100-OPEN-FILES THRU P1100-EXIT.
+           PERFORM P1200-READ-PARM THRU P1200-EXIT.
+           PERFORM P1500-COMPUTE-CYCLE-RANGE THRU P1500-EXIT.
+           PERFORM P1600-READ-FIRST-UNEIN THRU P1600-EXIT.
+       P1000-EXIT.
+           EXIT.
+      * P1100-OPEN-FILES - THE ABEND REASON IS JUST THE DDNAME.
+       P1100-OPEN-FILES.
+           OPEN INPUT UNEIN.
+           IF WS-FS-INPUT NOT = '00'
+               MOVE 'UNEIN' TO WS-AB-REASON
+               PERFORM P9900-FATAL-OPEN THRU P9900-EXIT.
+           OPEN INPUT RATEMST.
+           IF WS-FS-TABLE NOT = '00'
+               MOVE 'RATEMST' TO WS-AB-REASON
+               PERFORM P9900-FATAL-OPEN THRU P9900-EXIT.
+           OPEN OUTPUT RATOUT.
+           IF WS-FS-OUTPUT NOT = '00'
+               MOVE 'RATOUT' TO WS-AB-REASON
+               PERFORM P9900-FATAL-OPEN THRU P9900-EXIT.
+           OPEN OUTPUT BDTLOUT.
+           IF WS-FS-OUTPUT NOT = '00'
+               MOVE 'BDTLOUT' TO WS-AB-REASON
+               PERFORM P9900-FATAL-OPEN THRU P9900-EXIT.
+           OPEN OUTPUT SUSOUT.
+           IF WS-FS-SUSPENSE NOT = '00'
+               MOVE 'SUSOUT' TO WS-AB-REASON
+               PERFORM P9900-FATAL-OPEN THRU P9900-EXIT.
+           OPEN OUTPUT CTLOUT.
+           IF WS-FS-CONTROL NOT = '00'
+               MOVE 'CTLOUT' TO WS-AB-REASON
+               PERFORM P9900-FATAL-OPEN THRU P9900-EXIT.
+           OPEN OUTPUT RPTOUT.
+           IF WS-FS-OUTPUT NOT = '00'
+               MOVE 'RPTOUT' TO WS-AB-REASON
+               PERFORM P9900-FATAL-OPEN THRU P9900-EXIT.
+       P1100-EXIT.
+           EXIT.
+       P1200-READ-PARM.
+           MOVE SPACES TO WS-PARM-CARD.
+           ACCEPT WS-PARM-CARD FROM SYSIN.
+           MOVE PC1-TARIFF-CD TO R1-TARIFF-CD.
+           IF R1-TARIFF-CD = SPACES
+               MOVE WS-DEFAULT-TARIFF TO R1-TARIFF-CD.
+           MOVE PC1-RUN-ID TO R1-RUN-ID.
+           MOVE PC1-CYCLE-YYDDD TO R1-CYCLE-YYDDD.
+           MOVE PC1-BILL-PERIOD TO R1-BILL-PERIOD.
+       P1200-EXIT.
+           EXIT.
+      * P1500-COMPUTE-CYCLE-RANGE - SAME YEAR-WRAP ASSUMPTION USED
+      * ACROSS THE RATING SUITE FOR A STANDARD BILLING CYCLE.
+       P1500-COMPUTE-CYCLE-RANGE.
+           MOVE PC1-CYCLE-YYDDD TO WS-CYC-START-YYDDD.
+           IF PC1-CYCLE-DAYS > 0
+               COMPUTE WS-CYC-END-DDD = WS-CYS-DDD + PC1-CYCLE-DAYS - 1
+               MOVE PC1-CYCLE-DAYS TO WS-CYC-TOTAL-DAYS
+           ELSE
+               COMPUTE WS-CYC-END-DDD = WS-CYS-DDD + 29
+               MOVE 30 TO WS-CYC-TOTAL-DAYS.
+       P1500-EXIT.
+           EXIT.
+       P1600-READ-FIRST-UNEIN.
+           PERFORM P2100-READ-UNEIN THRU P2100-EXIT.
+       P1600-EXIT.
+           EXIT.
+       P9900-FATAL-OPEN.
+           MOVE WS-PGM-NAME TO WS-AB-PGM.
+           MOVE 'P1100-OPEN-FILES' TO WS-AB-PARA.
+           CALL 'CABABEND' USING WS-AB-PGM WS-AB-PARA WS-AB-REASON
+               WS-AB-USER-CODE WS-RC-ABEND.
+       P9900-EXIT.
+           EXIT.
+      * S200-MAIN-PROCESS SECTION - ONE PASS PER UNEIN RECORD.
+       S200-MAIN-PROCESS SECTION.
+       P2000-PROCESS.
+           ADD 1 TO WS-READ-CNT.
+           MOVE 'Y' TO WS-VALID-SW.
+           PERFORM P2200-VALIDATE-REC-TYPE THRU P2200-EXIT.
+           IF WS-RECORD-VALID
+               PERFORM P2300-LOOKUP-CIRCUIT THRU P2300-EXIT.
+           IF WS-RECORD-VALID
+               PERFORM P2400-XREF-USOC THRU P2400-EXIT.
+           IF WS-RECORD-VALID
+               PERFORM P2500-LOOKUP-RATE-EXACT THRU P2500-EXIT.
+           IF WS-RECORD-VALID
+               PERFORM P2600-COMPUTE-MRC THRU P2600-EXIT
+               PERFORM P6000-CHECK-LOOP-REPRICE THRU P6000-EXIT
+               PERFORM P2700-CHECK-NRC-ELIGIBLE THRU P2700-EXIT
+               PERFORM P2800-ROUND-TOTAL THRU P2800-EXIT
+               PERFORM P3000-WRITE-RATED-OUTPUT THRU P3000-EXIT
+           ELSE
+               PERFORM P3900-REJECT-TO-SUSPENSE THRU P3900-EXIT.
+           PERFORM P2100-READ-UNEIN THRU P2100-EXIT.
+       P2000-EXIT.
+           EXIT.
+       P2100-READ-UNEIN.
+           IF NOT WS-EOF
+               READ UNEIN
+                   AT END MOVE 'Y' TO WS-EOF-SW.
+       P2100-EXIT.
+           EXIT.
+      * P2200-VALIDATE-REC-TYPE - ONLY '07' IS EXPECTED ON UNEIN.
+       P2200-VALIDATE-REC-TYPE.
+           IF NOT CD-UNBUNDLED
+               MOVE 'N' TO WS-VALID-SW
+               MOVE EC-DATE-INVALID TO WS-CURRENT-ERR-CODE.
+       P2200-EXIT.
+           EXIT.
+      * P2300-LOOKUP-CIRCUIT - CABCIRCL OWNS THE CIRCMST VSAM ACCESS.
+       P2300-LOOKUP-CIRCUIT.
+           MOVE CD-SP-CIRCUIT-ID TO CI-CIRCUIT-ID.
+           CALL 'CABCIRCL' USING CI-CIRCUIT-ID CABS-CIRCUIT-RECORD
+               WS-RC-CIRCL.
+           MOVE 'N' TO WS-CL-FOUND-SW.
+           IF WS-RC-CIRCL = 0
+               MOVE 'Y' TO WS-CL-FOUND-SW.
+           IF NOT WS-CL-FOUND
+               MOVE 'N' TO WS-VALID-SW
+               MOVE EC-CIRCUIT-UNKNOWN TO WS-CURRENT-ERR-CODE
+               ADD 1 TO WS-MC-CIRCUIT-NOT-FOUND.
+       P2300-EXIT.
+           EXIT.
+      * P2400-XREF-USOC - LINEAR SEARCH OF THE 5-ROW SEED TABLE.
+       P2400-XREF-USOC.
+           MOVE 'N' TO WS-UX-FOUND-SW.
+           PERFORM P2410-SEARCH-ONE-USOC THRU P2410-EXIT
+               VARYING WS-UX-SUB FROM 1 BY 1
+               UNTIL WS-UX-SUB > 5 OR WS-UX-FOUND.
+           IF NOT WS-UX-FOUND
+               MOVE 'N' TO WS-VALID-SW
+               MOVE EC-RATE-NOT-FOUND TO WS-CURRENT-ERR-CODE.
+       P2400-EXIT.
+           EXIT.
+       P2410-SEARCH-ONE-USOC.
+           IF WS-US-USOC (WS-UX-SUB) = CD-SP-USOC
+               MOVE WS-US-ELEM (WS-UX-SUB) TO WS-RK-ELEM
+               MOVE WS-US-CLASS (WS-UX-SUB) TO WS-UX-SEL-CLASS
+               MOVE 'Y' TO WS-UX-FOUND-SW.
+       P2410-EXIT.
+           EXIT.
+      * S250-RATE-LOOKUP SECTION - ONE EXACT-STATE ATTEMPT ONLY.
+       S250-RATE-LOOKUP SECTION.
+       P2500-LOOKUP-RATE-EXACT.
+           MOVE R1-TARIFF-CD TO RT-TARIFF-CD.
+           MOVE WS-RK-ELEM TO RT-RATE-ELEM.
+           MOVE WS-DEFAULT-JURIS TO RT-JURIS-CD.
+           MOVE CI-STATE-CD TO RT-STATE-CD.
+           MOVE R1-CYCLE-YYDDD TO RT-EFF-YYDDD.
+           START RATEMST KEY NOT LESS THAN RT-KEY
+               INVALID KEY MOVE 'N' TO WS-RR-FOUND-SW.
+           IF WS-RR-FOUND-SW NOT = 'N'
+               READ RATEMST NEXT RECORD
+                   AT END MOVE 'N' TO WS-RR-FOUND-SW
+                   NOT AT END PERFORM P2510-CHECK-RATE-MATCH
+                       THRU P2510-EXIT.
+           IF NOT WS-RR-FOUND
+               MOVE 'N' TO WS-VALID-SW
+               MOVE EC-RATE-NOT-FOUND TO WS-CURRENT-ERR-CODE
+               ADD 1 TO WS-MC-RATE-NOT-FOUND.
+       P2500-EXIT.
+           EXIT.
+      * P2510-CHECK-RATE-MATCH - THE ROW FOUND MUST MATCH TARIFF,
+      * ELEMENT, JURISDICTION AND STATE EXACTLY - NO RETRY ON A
+      * MISMATCH, THAT IS WHAT MAKES THIS LOOKUP EXACT-STATE ONLY.
+       P2510-CHECK-RATE-MATCH.
+           IF RT-TARIFF-CD = R1-TARIFF-CD AND
+                   RT-RATE-ELEM = WS-RK-ELEM AND
+                   RT-JURIS-CD = WS-DEFAULT-JURIS AND
+                   RT-STATE-CD = CI-STATE-CD AND
+                   (RT-EXP-YYDDD = 0 OR
+                    RT-EXP-YYDDD NOT < R1-CYCLE-YYDDD)
+               MOVE 'Y' TO WS-RR-FOUND-SW
+               MOVE RT-INITIAL-RATE TO WS-SEL-MRC-RATE
+               MOVE RT-SETUP-CHG TO WS-SEL-SETUP-CHG
+               MOVE RT-ROUND-RULE TO WS-SEL-ROUND-RULE
+               MOVE RT-ROUND-POS TO WS-SEL-ROUND-POS
+           ELSE
+               MOVE 'N' TO WS-RR-FOUND-SW.
+       P2510-EXIT.
+           EXIT.
+      * S300-CALCULATION SECTION.
+       S300-CALCULATION SECTION.
+      * P2600-COMPUTE-MRC - RATE TIMES QUANTITY, ROUNDED.
+       P2600-COMPUTE-MRC.
+           COMPUTE WS-AM-MRC-AMOUNT ROUNDED =
+               WS-SEL-MRC-RATE * CD-SP-QTY.
+       P2600-EXIT.
+           EXIT.
+      * P2700-CHECK-NRC-ELIGIBLE - PLAIN TRUNCATING COMPUTE, NOT
+      * ROUNDED - PER THE 1994 UNE PRICING ORDER, CABS-STD-041.
+       P2700-CHECK-NRC-ELIGIBLE.
+           MOVE CI-INSTALL-YYDDD TO WS-DC-INSTALL-YYDDD.
+           MOVE 0 TO WS-AM-NRC-AMOUNT.
+           IF CI-INSTALL-YYDDD NOT = 0 AND
+                   WS-DC-INSTALL-DDD NOT < WS-CYS-DDD AND
+                   WS-DC-INSTALL-DDD NOT > WS-CYC-END-DDD
+               COMPUTE WS-AM-NRC-AMOUNT = WS-SEL-SETUP-CHG
+               ADD 1 TO WS-MC-NRC-APPLIED-CNT.
+       P2700-EXIT.
+           EXIT.
+      * P2800-ROUND-TOTAL - RT-ROUND-RULE DISPATCH, SAME GO TO ...
+      * DEPENDING ON IDIOM USED ACROSS THE RATING SUITE.
+       P2800-ROUND-TOTAL.
+           COMPUTE WS-AM-TOTAL-AMOUNT =
+               WS-AM-MRC-AMOUNT + WS-AM-NRC-AMOUNT.
+           MOVE WS-AM-TOTAL-AMOUNT TO R4-RAW-AMT.
+           MOVE WS-SEL-ROUND-RULE TO R4-RULE.
+           MOVE WS-SEL-ROUND-POS TO R4-POS.
+           MOVE 1 TO WS-RD-RULE-INDEX.
+           IF R4-RULE = 'E'
+               MOVE 2 TO WS-RD-RULE-INDEX.
+           IF R4-RULE = 'T'
+               MOVE 3 TO WS-RD-RULE-INDEX.
+           IF R4-RULE = 'C'
+               MOVE 4 TO WS-RD-RULE-INDEX.
+           GO TO P2810-ROUND-UP P2820-ROUND-EVEN P2830-TRUNCATE
+               P2840-ROUND-CEILING DEPENDING ON WS-RD-RULE-INDEX.
+       P2810-ROUND-UP.
+           COMPUTE R4-ROUNDED-AMT ROUNDED = R4-RAW-AMT.
+           GO TO P2850-FINISH-ROUND.
+      *    THE 'E' RULE HAS NEVER BEEN IMPLEMENTED DIFFERENTLY FROM
+      *    'U' ANYWHERE IN THE RATING SUITE.
+       P2820-ROUND-EVEN.
+           COMPUTE R4-ROUNDED-AMT ROUNDED = R4-RAW-AMT.
+           GO TO P2850-FINISH-ROUND.
+       P2830-TRUNCATE.
+           COMPUTE R4-ROUNDED-AMT = R4-RAW-AMT.
+           GO TO P2850-FINISH-ROUND.
+       P2840-ROUND-CEILING.
+           COMPUTE R4-ROUNDED-AMT = R4-RAW-AMT.
+           COMPUTE R4-RESIDUE = R4-RAW-AMT - R4-ROUNDED-AMT.
+           IF R4-RESIDUE > 0
+               ADD 0.01 TO R4-ROUNDED-AMT.
+       P2850-FINISH-ROUND.
+           MOVE R4-ROUNDED-AMT TO WS-AM-TOTAL-AMOUNT.
+       P2800-EXIT.
+           EXIT.
+      *****************************************************************
+      * S600-LOOP-REPRICE SECTION - RECALCULATES A LOOP ELEMENT'S     *
+      * MONTHLY CHARGE AGAINST THE REVISED TELRIC SCHEDULE (TARIFF    *
+      * UNE2) WHEN THE STATE COMMISSION TRUE-UP IS ACTIVE.  GATED BY  *
+      * WS-LOOP-REPRICE-SW, SET AT INIT FROM THE REPRICE CARD.      * *
+      *****************************************************************
+       S600-LOOP-REPRICE SECTION.
+       P6000-CHECK-LOOP-REPRICE.
+           IF WS-EC-LOOP-CLASS AND WS-LOOP-REPRICE-ON
+               PERFORM P6100-UNE-LOOP-REPRICE THRU P6100-EXIT.
+       P6000-EXIT.
+           EXIT.
+       P6100-UNE-LOOP-REPRICE.
+           PERFORM P6110-COMPUTE-REVISED-RATE THRU P6110-EXIT.
+           PERFORM P6120-APPLY-REPRICE-DELTA THRU P6120-EXIT.
+       P6100-EXIT.
+           EXIT.
+       P6110-COMPUTE-REVISED-RATE.
+           MOVE 'N' TO WS-REPRICE-FOUND-SW.
+           MOVE WS-REVISED-TARIFF TO RT-TARIFF-CD.
+           MOVE WS-RK-ELEM TO RT-RATE-ELEM.
+           MOVE WS-DEFAULT-JURIS TO RT-JURIS-CD.
+           MOVE CI-STATE-CD TO RT-STATE-CD.
+           MOVE R1-CYCLE-YYDDD TO RT-EFF-YYDDD.
+           START RATEMST KEY NOT LESS THAN RT-KEY
+               INVALID KEY MOVE 'N' TO WS-REPRICE-FOUND-SW.
+           IF WS-REPRICE-FOUND-SW NOT = 'N'
+               READ RATEMST NEXT RECORD
+                   AT END MOVE 'N' TO WS-REPRICE-FOUND-SW
+                   NOT AT END
+                       IF RT-TARIFF-CD = WS-REVISED-TARIFF AND
+                               RT-RATE-ELEM = WS-RK-ELEM AND
+                               RT-STATE-CD = CI-STATE-CD
+                           MOVE 'Y' TO WS-REPRICE-FOUND-SW
+                           MOVE RT-INITIAL-RATE TO WS-REPRICE-NEW-RATE
+                       ELSE
+                           MOVE 'N' TO WS-REPRICE-FOUND-SW.
+       P6110-EXIT.
+           EXIT.
+      * P6120-APPLY-REPRICE-DELTA - ADDS THE DIFFERENCE BETWEEN THE
+      * REVISED AND ORIGINAL PER-UNIT RATE, TIMES QUANTITY, ONTO THE
+      * MRC ALREADY COMPUTED IN P2600.
+       P6120-APPLY-REPRICE-DELTA.
+           IF WS-REPRICE-FOUND
+               COMPUTE WS-REPRICE-DELTA ROUNDED =
+                   (WS-REPRICE-NEW-RATE - WS-SEL-MRC-RATE) * CD-SP-QTY
+               ADD WS-REPRICE-DELTA TO WS-AM-MRC-AMOUNT
+               ADD 1 TO WS-MC-LOOP-REPRICED-CNT.
+       P6120-EXIT.
+           EXIT.
+      * S350-OUTPUT SECTION - RATOUT PASS-THROUGH PLUS ONE BDTLOUT
+      * BILL DETAIL ELEMENT PER RATED CDR.
+       S350-OUTPUT SECTION.
+       P3000-WRITE-RATED-OUTPUT.
+           PERFORM P3100-WRITE-RATOUT THRU P3100-EXIT.
+           PERFORM P3200-WRITE-BILL-DETAIL THRU P3200-EXIT.
+           ADD 1 TO WS-WRITE-CNT.
+           CALL 'CABHASH' USING CD-OCN WS-HW-OCN.
+           ADD CD-SEQ-NBR TO WS-HW-SEQ.
+           ADD CD-SP-QTY TO WS-HW-MINUTES.
+           ADD WS-AM-TOTAL-AMOUNT TO WS-HW-AMOUNT.
+       P3000-EXIT.
+           EXIT.
+       P3100-WRITE-RATOUT.
+           MOVE CD-OCN TO RO-OCN.
+           MOVE CD-BAN TO RO-BAN.
+           MOVE CD-SEQ-NBR TO RO-SEQ-NBR.
+           MOVE CD-SP-CIRCUIT-ID TO RO-CIRCUIT-ID.
+           MOVE WS-RK-ELEM TO RO-ELEM.
+           MOVE WS-UX-SEL-CLASS TO RO-ELEM-CLASS.
+           MOVE 'R' TO RO-RATE-STATUS.
+           MOVE R1-CYCLE-YYDDD TO RO-CYCLE-YYDDD.
+           MOVE CI-STATE-CD TO RO-STATE-CD.
+           MOVE WS-AM-MRC-AMOUNT TO RO-MRC-AMOUNT.
+           MOVE WS-AM-NRC-AMOUNT TO RO-NRC-AMOUNT.
+           MOVE WS-AM-TOTAL-AMOUNT TO RO-TOT-AMOUNT.
+           MOVE SPACES TO RO-FILLER.
+           WRITE CABS-RATOUT-RECORD.
+       P3100-EXIT.
+           EXIT.
+       P3200-WRITE-BILL-DETAIL.
+           MOVE CD-BAN TO BD-BAN.
+           MOVE R1-BILL-PERIOD TO BD-BILL-PERIOD.
+           MOVE 'UN' TO BD-SECTION.
+           MOVE CD-SEQ-NBR TO BD-LINE-SEQ.
+           MOVE CD-OCN TO BD-OCN.
+           MOVE WS-DEFAULT-JURIS TO BD-JURIS-CD.
+           MOVE CI-STATE-CD TO BD-STATE-CD.
+           PERFORM P3210-BUILD-DESCRIPTION THRU P3210-EXIT.
+           MOVE WS-DESC-ASSEMBLED TO BD-DESCRIPTION.
+           MOVE CD-SP-QTY TO BD-TOT-MINUTES.
+           MOVE WS-AM-TOTAL-AMOUNT TO BD-TOT-AMOUNT.
+           MOVE WS-AM-TOTAL-AMOUNT TO BD-TOT-ROUNDED.
+           MOVE 0 TO BD-ROUND-DELTA.
+           MOVE 1 TO BD-ELEM-CNT.
+           SET BD-EX TO 1.
+           MOVE WS-RK-ELEM TO BD-EL-RATE-ELEM (BD-EX).
+           MOVE CD-SP-QTY TO BD-EL-QTY (BD-EX).
+           MOVE WS-SEL-MRC-RATE TO BD-EL-RATE (BD-EX).
+           MOVE WS-AM-TOTAL-AMOUNT TO BD-EL-AMOUNT (BD-EX).
+           MOVE WS-SEL-ROUND-RULE TO BD-EL-ROUND-RULE (BD-EX).
+           MOVE WS-PGM-NAME TO BD-EL-SRC-PROCESS (BD-EX).
+           WRITE CABS-BILL-DETAIL.
+       P3200-EXIT.
+           EXIT.
+       P3210-BUILD-DESCRIPTION.
+           MOVE CD-SP-USOC TO WS-DESC-USOC.
+           STRING 'UNE ELEMENT ' DELIMITED BY SIZE
+               WS-RK-ELEM DELIMITED BY SIZE
+               ' USOC ' DELIMITED BY SIZE
+               WS-DESC-USOC DELIMITED BY SIZE
+               INTO WS-DESC-ASSEMBLED.
+       P3210-EXIT.
+           EXIT.
+      * P3900-REJECT-TO-SUSPENSE - ANY FAILED CHECK LANDS HERE.
+       P3900-REJECT-TO-SUSPENSE.
+           MOVE WS-CURRENT-ERR-CODE TO FD-SU-ERR-CODE.
+           MOVE 'E' TO FD-SU-ERR-SEVERITY.
+           MOVE WS-PGM-NAME TO FD-SU-DETECT-PGM.
+           MOVE 'P2000-PROCESS' TO FD-SU-DETECT-PARA.
+           MOVE R1-RUN-ID TO FD-SU-RUN-ID.
+           MOVE CABS-CDR-RECORD TO FD-SU-ORIG-RECORD.
+           MOVE SPACES TO FD-SU-FILLER.
+           CALL 'CABERRWR' USING FD-SU-ERR-CODE FD-SU-DETECT-PGM
+               FD-SU-RUN-ID WS-RC-ERRWR.
+           WRITE CABS-SUSPENSE-RECORD-FD.
+           ADD 1 TO WS-REJECT-CNT.
+       P3900-EXIT.
+           EXIT.
+      * S800-CONTROL-BALANCE SECTION.
+       S800-CONTROL-BALANCE SECTION.
+       P8000-CONTROL.
+           PERFORM P8010-PRINT-REPORT THRU P8010-EXIT.
+           PERFORM P8100-BUILD-CONTROL-REC THRU P8100-EXIT.
+           PERFORM P8200-CHECK-BALANCE THRU P8200-EXIT.
+           PERFORM P8300-WRITE-CONTROL-REC THRU P8300-EXIT.
+       P8000-EXIT.
+           EXIT.
+       P8010-PRINT-REPORT.
+           ADD 1 TO WS-RPT-PAGE-NBR.
+           MOVE SPACES TO CABS-PRINT-LINE.
+           MOVE '1' TO PC-CC.
+           MOVE WS-RPT-TITLE1 TO PC-TEXT.
+           WRITE CABS-PRINT-LINE.
+           MOVE SPACES TO CABS-PRINT-LINE.
+           WRITE CABS-PRINT-LINE.
+           MOVE SPACES TO CABS-PRINT-LINE.
+           MOVE ' ' TO PC-CC.
+           MOVE 'READ' TO PC-COL-001-020.
+           MOVE WS-READ-CNT TO PC-COL-021-060.
+           WRITE CABS-PRINT-LINE.
+           MOVE SPACES TO CABS-PRINT-LINE.
+           MOVE ' ' TO PC-CC.
+           MOVE 'WRITTEN' TO PC-COL-001-020.
+           MOVE WS-WRITE-CNT TO PC-COL-021-060.
+           WRITE CABS-PRINT-LINE.
+           MOVE SPACES TO CABS-PRINT-LINE.
+           MOVE ' ' TO PC-CC.
+           MOVE 'REJECTED' TO PC-COL-001-020.
+           MOVE WS-REJECT-CNT TO PC-COL-021-060.
+           WRITE CABS-PRINT-LINE.
+           MOVE SPACES TO CABS-PRINT-LINE.
+           MOVE ' ' TO PC-CC.
+           MOVE 'CIRCUIT NOT FOUND' TO PC-COL-001-020.
+           MOVE WS-MC-CIRCUIT-NOT-FOUND TO PC-COL-021-060.
+           WRITE CABS-PRINT-LINE.
+           MOVE SPACES TO CABS-PRINT-LINE.
+           MOVE ' ' TO PC-CC.
+           MOVE 'RATE NOT FOUND' TO PC-COL-001-020.
+           MOVE WS-MC-RATE-NOT-FOUND TO PC-COL-021-060.
+           WRITE CABS-PRINT-LINE.
+           MOVE SPACES TO CABS-PRINT-LINE.
+           MOVE ' ' TO PC-CC.
+           MOVE 'NRC APPLIED' TO PC-COL-001-020.
+           MOVE WS-MC-NRC-APPLIED-CNT TO PC-COL-021-060.
+           WRITE CABS-PRINT-LINE.
+       P8010-EXIT.
+           EXIT.
+       P8100-BUILD-CONTROL-REC.
+           MOVE R1-RUN-ID TO CT-RUN-ID.
+           MOVE WS-PGM-NAME TO CT-PROCESS-ID.
+           MOVE 1 TO CT-STEP-SEQ.
+           MOVE R1-CYCLE-YYDDD TO CT-CYCLE-YYDDD.
+           MOVE R1-BILL-PERIOD TO CT-BILL-PERIOD.
+           MOVE 0 TO CT-RERUN-NBR.
+           MOVE SPACES TO CT-JOBNAME.
+           MOVE SPACES TO CT-STEPNAME.
+           MOVE WS-READ-CNT TO CT-READ.
+           MOVE WS-WRITE-CNT TO CT-WRITTEN.
+           MOVE WS-REJECT-CNT TO CT-REJECTED.
+           MOVE 0 TO CT-SUMMARISED.
+           MOVE 0 TO CT-CARRIED-FWD.
+           MOVE WS-HW-MINUTES TO CT-HASH-MINUTES.
+           MOVE WS-HW-AMOUNT TO CT-HASH-AMOUNT.
+           MOVE WS-HW-SEQ TO CT-HASH-SEQ.
+           MOVE WS-HW-OCN TO CT-HASH-OCN.
+           MOVE SPACES TO CT-RESTART-KEY.
+           MOVE SPACES TO CT-FILLER.
+           MOVE 0 TO CT-RC.
+           MOVE SPACES TO CT-ABEND-CD.
+       P8100-EXIT.
+           EXIT.
+       P8200-CHECK-BALANCE.
+           IF CT-READ = CT-WRITTEN + CT-REJECTED + CT-SUMMARISED +
+                   CT-CARRIED-FWD
+               MOVE 'B' TO CT-BAL-IND
+           ELSE
+               MOVE 'O' TO CT-BAL-IND.
+       P8200-EXIT.
+           EXIT.
+       P8300-WRITE-CONTROL-REC.
+           MOVE CABS-CONTROL-RECORD TO CABS-CTLOUT-RECORD.
+           WRITE CABS-CTLOUT-RECORD.
+       P8300-EXIT.
+           EXIT.
+      * S900-TERMINATION SECTION.
+       S900-TERMINATION SECTION.
+       P9000-TERM.
+           CLOSE UNEIN.
+           CLOSE RATEMST.
+           CLOSE RATOUT.
+           CLOSE BDTLOUT.
+           CLOSE SUSOUT.
+           CLOSE CTLOUT.
+           CLOSE RPTOUT.
+           DISPLAY 'CABRAT05 - RUN COMPLETE'.
+           DISPLAY '  READ        = ' WS-READ-CNT.
+           DISPLAY '  WRITTEN     = ' WS-WRITE-CNT.
+           DISPLAY '  REJECTED    = ' WS-REJECT-CNT.
+           DISPLAY '  NRC APPLIED = ' WS-MC-NRC-APPLIED-CNT.
+       P9000-EXIT.
+           EXIT.

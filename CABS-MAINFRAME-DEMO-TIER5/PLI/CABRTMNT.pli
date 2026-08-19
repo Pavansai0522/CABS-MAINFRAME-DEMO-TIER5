@@ -1,0 +1,422 @@
+/*********************************************************************/
+/* CABRTMNT - ACCESS RATE TABLE MAINTENANCE UTILITY                  */
+/* APPLICATION : CABS                                                */
+/* INPUTS      : TRANIN   TELCABS.CABS.RATE.TRANS      80 BYTE CARD  */
+/*             : RATEMST  TELCABS.CABS.RATE             VSAM KSDS    */
+/*                         (COPYBOOKS/CABSRATE.CPY LAYOUT)           */
+/* OUTPUTS     : RATEMST  UPDATED IN PLACE                           */
+/*             : AUDPRT   SYSPRINT - AUDIT LISTING                   */
+/*             : CTLOUT   TELCABS.CABS.CONTROL(+1)    CABSCTL LAYOUT */
+/* CONTROL     : CTLOUT, CABSCTL LAYOUT                              */
+/* BALANCE     : TR-READ = TR-APPLIED + TR-REJECTED                  */
+/* RESTART     : FULL RERUN - TRANSACTIONS ALREADY APPLIED ARE       */
+/*               RE-EDITED AND REJECTED AS DUPLICATE KEY ON A RERUN, */
+/*               SO A RERUN AFTER A PARTIAL FAILURE PRODUCES A       */
+/*               SUSPENSE LISTING RATHER THAN SILENT REAPPLICATION.  */
+/*                                                                    */
+/* APPLIES ADD/CHANGE/DELETE TRANSACTIONS AGAINST THE ACCESS RATE    */
+/* KSDS.  RUN OVERNIGHT FROM THE RATE ADMINISTRATION GROUP'S BATCH   */
+/* WINDOW WHEN A NEW TARIFF FILING OR RATE CASE ORDER IS KEYED FROM  */
+/* THE PAPER FILING RATHER THAN THROUGH THE ON-LINE RATE MAINTENANCE */
+/* CICS TRANSACTION.  THE ON-LINE TRANSACTION AND THIS UTILITY SHARE */
+/* THE SAME OVERLAP EDIT RULE - SEE P-EDIT-OVERLAP BELOW - BUT ARE   */
+/* MAINTAINED AS SEPARATE PROGRAMS BECAUSE THE ON-LINE PATH VALIDATES*/
+/* AGAINST OPERATOR INPUT ONE RECORD AT A TIME AND THIS PATH RUNS A  */
+/* FULL BATCH OF TRANSACTIONS IN SEQUENCE, WHERE A LATER CARD CAN    */
+/* LEGITIMATELY DEPEND ON AN EARLIER CARD IN THE SAME RUN HAVING     */
+/* ALREADY BEEN APPLIED.                                              */
+/*                                                                    */
+/* REVISION HISTORY                                                  */
+/*   V1.00  1988-04-11  P.NAIR        INITIAL - ADD/CHANGE ONLY      */
+/*   V1.02  1990-11-30  P.NAIR        DELETE ACTION ADDED            */
+/*   V1.04  1994-06-22  P.NAIR        OVERLAP EDIT ADDED AFTER THE   */
+/*                                    1994 INTERSTATE RATE CASE      */
+/*                                    LOADED TWO OVERLAPPING BANDS   */
+/*                                    FOR THE SAME TARIFF/ELEMENT    */
+/*   V1.06  1999-02-08  R.OKONKWO     BAND COUNT VALIDATION ADDED    */
+/*   V1.08  2005-11-08  P.NAIR        AUDIT LISTING REFORMATTED FOR  */
+/*                                    THE RATE ADMIN GROUP'S PAGE    */
+/*                                    WIDTH STANDARD                 */
+/*   V1.09  2011-09-06  A.BUKOWSKI    CONTROL RECORD ADDED - BEFORE  */
+/*                                    THIS RELEASE THE RUN WAS NOT   */
+/*                                    BALANCED AGAINST ANYTHING      */
+/*   V1.10  2019-05-14  M.OYELARAN    RECOMPILE ONLY, OS PL/I V2     */
+/*                                    OPTIMIZING COMPILER            */
+/*********************************************************************/
+CABRTMNT: PROC OPTIONS(MAIN);
+
+   /*------------------------------------------------------------*/
+   /* TRANSACTION CARD - 80 BYTES, TELCABS.CABS.RATE.TRANS       */
+   /*------------------------------------------------------------*/
+   DCL 1 TRAN_REC,
+         2 TR_ACTION_CD     CHAR(1),
+         2 TR_TARIFF_CD     CHAR(4),
+         2 TR_RATE_ELEM     CHAR(6),
+         2 TR_JURIS_CD      CHAR(1),
+         2 TR_STATE_CD      CHAR(2),
+         2 TR_EFF_YYDDD     PIC '99999',
+         2 TR_EXP_YYDDD     PIC '99999',
+         2 TR_INIT_SIGN     CHAR(1),
+         2 TR_INIT_RATE     PIC '9999999999',
+         2 TR_ADDL_SIGN     CHAR(1),
+         2 TR_ADDL_RATE     PIC '9999999999',
+         2 TR_ROUND_RULE    CHAR(1),
+         2 TR_ROUND_POS     PIC '9',
+         2 TR_BAND_CNT      PIC '99',
+         2 TR_FILLER        CHAR(30);
+
+   DCL TRANIN FILE RECORD INPUT SEQUENTIAL
+       ENV(FB RECSIZE(80) BLKSIZE(8000));
+
+   /*------------------------------------------------------------*/
+   /* RATE MASTER KSDS - MIRRORS COPYBOOKS/CABSRATE.CPY LESS THE  */
+   /* OCCURS DEPENDING ON BAND TABLE, WHICH IS OUT OF SCOPE FOR   */
+   /* THIS UTILITY - BAND DETAIL IS MAINTAINED BY THE SEPARATE    */
+   /* CABRAT01 BAND LOAD PROGRAM, NOT BY RATE ADMINISTRATION.     */
+   /*------------------------------------------------------------*/
+   DCL 1 RATE_REC,
+         2 RT_TARIFF_CD     CHAR(4),
+         2 RT_RATE_ELEM     CHAR(6),
+         2 RT_JURIS_CD      CHAR(1),
+         2 RT_STATE_CD      CHAR(2),
+         2 RT_EFF_YYDDD     PIC '99999',
+         2 RT_INIT_RATE     FIXED DEC(10,5),
+         2 RT_ADDL_RATE     FIXED DEC(10,5),
+         2 RT_SETUP_CHG     FIXED DEC(12,5),
+         2 RT_MIN_CHG       FIXED DEC(9,2),
+         2 RT_MAX_CHG       FIXED DEC(13,2),
+         2 RT_ROUND_RULE    CHAR(1),
+         2 RT_ROUND_POS     PIC '9',
+         2 RT_INIT_PERIOD   PIC '9999',
+         2 RT_ADDL_PERIOD   PIC '9999',
+         2 RT_DISC_ELIG     CHAR(1),
+         2 RT_EXP_YYDDD     PIC '99999',
+         2 RT_BAND_CNT      PIC '99';
+
+   DCL 1 RATE_KEY,
+         2 RK_TARIFF_CD     CHAR(4),
+         2 RK_RATE_ELEM     CHAR(6),
+         2 RK_JURIS_CD      CHAR(1),
+         2 RK_STATE_CD      CHAR(2),
+         2 RK_EFF_YYDDD     PIC '99999';
+
+   DCL RATEMST FILE RECORD UPDATE KEYED
+       ENV(INDEXED);
+
+   /*------------------------------------------------------------*/
+   /* CONTROL RECORD - CABSCTL LAYOUT, SEE COPYBOOKS/CABSCTL.CPY */
+   /*------------------------------------------------------------*/
+   DCL 1 CTL_REC,
+         2 CT_RUN_ID        CHAR(12),
+         2 CT_PROCESS_ID    CHAR(8),
+         2 CT_STEP_SEQ      PIC '999',
+         2 CT_CYCLE_YYDDD   PIC '99999',
+         2 CT_BILL_PERIOD   PIC '999999',
+         2 CT_RERUN_NBR     PIC '99',
+         2 CT_JOBNAME       CHAR(8),
+         2 CT_STEPNAME      CHAR(8),
+         2 CT_READ          FIXED DEC(11),
+         2 CT_WRITTEN       FIXED DEC(11),
+         2 CT_REJECTED      FIXED DEC(11),
+         2 CT_SUMMARISED    FIXED DEC(11),
+         2 CT_CARRIED_FWD   FIXED DEC(11),
+         2 CT_FILLER        CHAR(115);
+
+   DCL CTLOUT FILE RECORD OUTPUT SEQUENTIAL
+       ENV(FB RECSIZE(180) BLKSIZE(18000));
+
+   DCL AUDPRT FILE STREAM OUTPUT PRINT;
+
+   DCL EOF_SW           BIT(1) INIT('0'B);
+   DCL WS_READ_CNT       FIXED DEC(11) INIT(0);
+   DCL WS_APPLIED_CNT    FIXED DEC(11) INIT(0);
+   DCL WS_REJECTED_CNT   FIXED DEC(11) INIT(0);
+   DCL WS_ADD_CNT        FIXED DEC(9)  INIT(0);
+   DCL WS_CHG_CNT        FIXED DEC(9)  INIT(0);
+   DCL WS_DEL_CNT        FIXED DEC(9)  INIT(0);
+   DCL WS_LINE_CNT       FIXED DEC(5)  INIT(99);
+   DCL WS_PAGE_NBR       FIXED DEC(5)  INIT(0);
+   DCL WS_REJ_REASON     CHAR(40);
+   DCL WS_OK             BIT(1);
+
+   DCL (ABS, SUBSTR, INDEX, DATE, TIME) BUILTIN;
+
+   ON ENDFILE(TRANIN) EOF_SW = '1'B;
+
+   CALL P_INIT;
+   DO WHILE (EOF_SW = '0'B);
+      CALL P_READ_TRAN;
+      IF EOF_SW = '0'B THEN
+         CALL P_PROCESS_TRAN;
+   END;
+   CALL P_TERM;
+
+   /*==============================================================*/
+   P_INIT: PROC;
+      OPEN FILE(TRANIN);
+      OPEN FILE(RATEMST) UPDATE;
+      OPEN FILE(CTLOUT) OUTPUT;
+      OPEN FILE(AUDPRT) OUTPUT LINESIZE(132) PAGESIZE(60);
+      CALL P_PRINT_HEADING;
+   END P_INIT;
+
+   /*==============================================================*/
+   P_READ_TRAN: PROC;
+      READ FILE(TRANIN) INTO(TRAN_REC);
+      IF EOF_SW = '0'B THEN
+         WS_READ_CNT = WS_READ_CNT + 1;
+   END P_READ_TRAN;
+
+   /*==============================================================*/
+   /* DISPATCH ON THE ACTION CODE.  A "C" TRANSACTION WITHOUT A     */
+   /* MATCHING KEY AND A "D" TRANSACTION WITHOUT A MATCHING KEY ARE */
+   /* BOTH REJECTED RATHER THAN TREATED AS AN IMPLICIT ADD - THE    */
+   /* RATE ADMIN GROUP HAS ASKED TWICE FOR THIS AND BOTH TIMES IT   */
+   /* WAS BECAUSE A MISKEYED TARIFF CODE ON A CHANGE CARD WOULD     */
+   /* OTHERWISE HAVE SILENTLY CREATED A NEW RATE RECORD.            */
+   /*==============================================================*/
+   P_PROCESS_TRAN: PROC;
+      SELECT (TR_ACTION_CD);
+         WHEN ('A') CALL P_APPLY_ADD;
+         WHEN ('C') CALL P_APPLY_CHANGE;
+         WHEN ('D') CALL P_APPLY_DELETE;
+         OTHERWISE  DO;
+            WS_REJ_REASON = 'INVALID ACTION CODE';
+            CALL P_REJECT;
+         END;
+      END;
+   END P_PROCESS_TRAN;
+
+   /*==============================================================*/
+   P_APPLY_ADD: PROC;
+      CALL P_BUILD_KEY;
+      CALL P_EDIT_OVERLAP(WS_OK);
+      IF WS_OK = '0'B THEN DO;
+         CALL P_REJECT;
+         RETURN;
+      END;
+      CALL P_MOVE_TRAN_TO_RATE;
+      WRITE FILE(RATEMST) FROM(RATE_REC) KEYFROM(RATE_KEY);
+      IF ONCODE() = 0 THEN DO;
+         WS_APPLIED_CNT = WS_APPLIED_CNT + 1;
+         WS_ADD_CNT = WS_ADD_CNT + 1;
+         CALL P_AUDIT_LINE('ADD     APPLIED');
+      END;
+      ELSE DO;
+         WS_REJ_REASON = 'DUPLICATE KEY ON WRITE';
+         CALL P_REJECT;
+      END;
+   END P_APPLY_ADD;
+
+   /*==============================================================*/
+   P_APPLY_CHANGE: PROC;
+      CALL P_BUILD_KEY;
+      READ FILE(RATEMST) INTO(RATE_REC) KEY(RATE_KEY);
+      IF ONCODE() ^= 0 THEN DO;
+         WS_REJ_REASON = 'KEY NOT FOUND FOR CHANGE';
+         CALL P_REJECT;
+         RETURN;
+      END;
+      CALL P_MOVE_TRAN_TO_RATE;
+      REWRITE FILE(RATEMST) FROM(RATE_REC);
+      IF ONCODE() = 0 THEN DO;
+         WS_APPLIED_CNT = WS_APPLIED_CNT + 1;
+         WS_CHG_CNT = WS_CHG_CNT + 1;
+         CALL P_AUDIT_LINE('CHANGE  APPLIED');
+      END;
+      ELSE DO;
+         WS_REJ_REASON = 'REWRITE FAILED';
+         CALL P_REJECT;
+      END;
+   END P_APPLY_CHANGE;
+
+   /*==============================================================*/
+   /* DELETE REMOVES THE RECORD FROM THE KSDS OUTRIGHT.  RATE ADMIN */
+   /* USES THIS ONLY TO BACK OUT A MISKEYED ADD FROM THE SAME       */
+   /* BATCH WINDOW - AN EFFECTIVE RATE THAT WAS EVER BILLED FROM IS */
+   /* EXPIRED THROUGH A CHANGE TRANSACTION THAT SETS RT-EXP-YYDDD   */
+   /* INSTEAD, SO THE BILLED HISTORY STAYS ON THE KSDS.             */
+   /*==============================================================*/
+   P_APPLY_DELETE: PROC;
+      CALL P_BUILD_KEY;
+      READ FILE(RATEMST) INTO(RATE_REC) KEY(RATE_KEY);
+      IF ONCODE() ^= 0 THEN DO;
+         WS_REJ_REASON = 'KEY NOT FOUND FOR DELETE';
+         CALL P_REJECT;
+         RETURN;
+      END;
+      DELETE FILE(RATEMST);
+      IF ONCODE() = 0 THEN DO;
+         WS_APPLIED_CNT = WS_APPLIED_CNT + 1;
+         WS_DEL_CNT = WS_DEL_CNT + 1;
+         CALL P_AUDIT_LINE('DELETE  APPLIED');
+      END;
+      ELSE DO;
+         WS_REJ_REASON = 'DELETE FAILED';
+         CALL P_REJECT;
+      END;
+   END P_APPLY_DELETE;
+
+   /*==============================================================*/
+   P_BUILD_KEY: PROC;
+      RK_TARIFF_CD = TR_TARIFF_CD;
+      RK_RATE_ELEM = TR_RATE_ELEM;
+      RK_JURIS_CD  = TR_JURIS_CD;
+      RK_STATE_CD  = TR_STATE_CD;
+      RK_EFF_YYDDD = TR_EFF_YYDDD;
+   END P_BUILD_KEY;
+
+   /*==============================================================*/
+   P_MOVE_TRAN_TO_RATE: PROC;
+      DCL WS_INIT_NUM FIXED DEC(10,5);
+      DCL WS_ADDL_NUM FIXED DEC(10,5);
+
+      RT_TARIFF_CD  = TR_TARIFF_CD;
+      RT_RATE_ELEM  = TR_RATE_ELEM;
+      RT_JURIS_CD   = TR_JURIS_CD;
+      RT_STATE_CD   = TR_STATE_CD;
+      RT_EFF_YYDDD  = TR_EFF_YYDDD;
+      RT_EXP_YYDDD  = TR_EXP_YYDDD;
+      RT_ROUND_RULE = TR_ROUND_RULE;
+      RT_ROUND_POS  = TR_ROUND_POS;
+      RT_BAND_CNT   = TR_BAND_CNT;
+
+      WS_INIT_NUM = TR_INIT_RATE / 100000;
+      IF TR_INIT_SIGN = '-' THEN
+         WS_INIT_NUM = -WS_INIT_NUM;
+      RT_INIT_RATE = WS_INIT_NUM;
+
+      WS_ADDL_NUM = TR_ADDL_RATE / 100000;
+      IF TR_ADDL_SIGN = '-' THEN
+         WS_ADDL_NUM = -WS_ADDL_NUM;
+      RT_ADDL_RATE = WS_ADDL_NUM;
+   END P_MOVE_TRAN_TO_RATE;
+
+   /*==============================================================*/
+   /* OVERLAP EDIT.  A NEW ADD IS REJECTED IF ITS EFFECTIVE DATE    */
+   /* FALLS INSIDE THE EFFECTIVE/EXPIRATION WINDOW OF ANY EXISTING  */
+   /* RECORD FOR THE SAME TARIFF/ELEMENT/JURISDICTION/STATE.  THE   */
+   /* KSDS IS KEYED WITH EFFECTIVE DATE AS THE LOW-ORDER KEY        */
+   /* SEGMENT, SO A GENERIC KEY READ POSITIONS TO THE FIRST         */
+   /* GENERATION FOR THIS TARIFF/ELEMENT AND SEQUENTIAL READS WALK  */
+   /* FORWARD THROUGH EVERY GENERATION UNTIL THE KEY SEGMENT        */
+   /* CHANGES.                                                       */
+   /*==============================================================*/
+   P_EDIT_OVERLAP: PROC(OVL_OK);
+      DCL OVL_OK BIT(1) OUTPUT;
+      DCL 1 GENERIC_KEY,
+            2 GK_TARIFF_CD  CHAR(4),
+            2 GK_RATE_ELEM  CHAR(6),
+            2 GK_JURIS_CD   CHAR(1),
+            2 GK_STATE_CD   CHAR(2);
+      DCL SCAN_EOF BIT(1) INIT('0'B);
+
+      OVL_OK = '1'B;
+      GK_TARIFF_CD = TR_TARIFF_CD;
+      GK_RATE_ELEM = TR_RATE_ELEM;
+      GK_JURIS_CD  = TR_JURIS_CD;
+      GK_STATE_CD  = TR_STATE_CD;
+
+      READ FILE(RATEMST) INTO(RATE_REC)
+           KEY(GENERIC_KEY) GENKEY;
+      IF ONCODE() ^= 0 THEN
+         RETURN;
+
+      DO WHILE (SCAN_EOF = '0'B);
+         IF RT_TARIFF_CD ^= TR_TARIFF_CD |
+            RT_RATE_ELEM ^= TR_RATE_ELEM |
+            RT_JURIS_CD  ^= TR_JURIS_CD  |
+            RT_STATE_CD  ^= TR_STATE_CD  THEN
+            SCAN_EOF = '1'B;
+         ELSE DO;
+            IF TR_EFF_YYDDD >= RT_EFF_YYDDD &
+               TR_EFF_YYDDD <= RT_EXP_YYDDD THEN DO;
+               OVL_OK = '0'B;
+               SCAN_EOF = '1'B;
+            END;
+            ELSE DO;
+               READ FILE(RATEMST) INTO(RATE_REC) SEQUENTIAL;
+               IF ONCODE() ^= 0 THEN
+                  SCAN_EOF = '1'B;
+            END;
+         END;
+      END;
+   END P_EDIT_OVERLAP;
+
+   /*==============================================================*/
+   P_REJECT: PROC;
+      WS_REJECTED_CNT = WS_REJECTED_CNT + 1;
+      CALL P_AUDIT_LINE('*** REJECTED ***  ' || WS_REJ_REASON);
+   END P_REJECT;
+
+   /*==============================================================*/
+   P_PRINT_HEADING: PROC;
+      WS_PAGE_NBR = WS_PAGE_NBR + 1;
+      PUT FILE(AUDPRT) PAGE;
+      PUT FILE(AUDPRT) EDIT(
+         'CABRTMNT - ACCESS RATE TABLE MAINTENANCE - AUDIT LISTING',
+         'PAGE', WS_PAGE_NBR)
+         (SKIP, A, COLUMN(80), A, F(5));
+      PUT FILE(AUDPRT) EDIT(
+         'ACT TARIFF ELEM   J ST EFF-YYDDD RESULT')
+         (SKIP(2), A);
+      WS_LINE_CNT = 4;
+   END P_PRINT_HEADING;
+
+   /*==============================================================*/
+   P_AUDIT_LINE: PROC(MSG_TEXT);
+      DCL MSG_TEXT CHAR(*);
+      IF WS_LINE_CNT >= 55 THEN
+         CALL P_PRINT_HEADING;
+      PUT FILE(AUDPRT) EDIT(
+         TR_ACTION_CD, TR_TARIFF_CD, TR_RATE_ELEM, TR_JURIS_CD,
+         TR_STATE_CD, TR_EFF_YYDDD, MSG_TEXT)
+         (SKIP, A(2), X(1), A(6), X(1), A(6), X(1), A(1), X(1),
+          A(2), X(1), F(5), X(2), A);
+      WS_LINE_CNT = WS_LINE_CNT + 1;
+   END P_AUDIT_LINE;
+
+   /*==============================================================*/
+   P_TERM: PROC;
+      PUT FILE(AUDPRT) EDIT(
+         'TRANSACTIONS READ    :', WS_READ_CNT)
+         (SKIP(2), A, F(9));
+      PUT FILE(AUDPRT) EDIT(
+         'TRANSACTIONS APPLIED :', WS_APPLIED_CNT)
+         (SKIP, A, F(9));
+      PUT FILE(AUDPRT) EDIT(
+         '  ADDS               :', WS_ADD_CNT)
+         (SKIP, A, F(9));
+      PUT FILE(AUDPRT) EDIT(
+         '  CHANGES            :', WS_CHG_CNT)
+         (SKIP, A, F(9));
+      PUT FILE(AUDPRT) EDIT(
+         '  DELETES            :', WS_DEL_CNT)
+         (SKIP, A, F(9));
+      PUT FILE(AUDPRT) EDIT(
+         'TRANSACTIONS REJECTED:', WS_REJECTED_CNT)
+         (SKIP, A, F(9));
+
+      CT_RUN_ID      = 'RTMNT' || SUBSTR(DATE(),1,6);
+      CT_PROCESS_ID  = 'CABRTMNT';
+      CT_STEP_SEQ    = 10;
+      CT_CYCLE_YYDDD = SUBSTR(DATE(),1,5);
+      CT_BILL_PERIOD = 0;
+      CT_RERUN_NBR   = 0;
+      CT_JOBNAME     = 'CABP0410';
+      CT_STEPNAME    = 'STEP010';
+      CT_READ        = WS_READ_CNT;
+      CT_WRITTEN     = WS_APPLIED_CNT;
+      CT_REJECTED    = WS_REJECTED_CNT;
+      CT_SUMMARISED  = 0;
+      CT_CARRIED_FWD = 0;
+      CT_FILLER      = ' ';
+      WRITE FILE(CTLOUT) FROM(CTL_REC);
+
+      CLOSE FILE(TRANIN);
+      CLOSE FILE(RATEMST);
+      CLOSE FILE(CTLOUT);
+      CLOSE FILE(AUDPRT);
+   END P_TERM;
+
+END CABRTMNT;

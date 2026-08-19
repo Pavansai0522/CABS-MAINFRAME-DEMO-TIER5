@@ -1,0 +1,320 @@
+/*********************************************************************/
+/* CABSTREC - SETTLEMENT RECONCILIATION REPORT                       */
+/* APPLICATION : SETL                                                */
+/* INPUTS      : SETLMST  TELCABS.SETL.RECON.MASTER(0)   FB 090      */
+/*             : NETTIN   TELCABS.SETL.RECON.NETTING(0)  FB 090      */
+/*               (BOTH SORTED ASCENDING ON OCN, SETTLE PERIOD)       */
+/* OUTPUTS     : RECPRT   SYSPRINT - BANDED RECONCILIATION REPORT    */
+/* CONTROL     : CTLOUT   TELCABS.SETL.RUNCTL(+1)      CABSCTL LAYOUT*/
+/* BALANCE     : RC-MATCHED + RC-OURS-ONLY = RC-OUR-RECORDS          */
+/*             : RC-MATCHED + RC-THEIRS-ONLY = RC-THEIR-RECORDS      */
+/* RESTART     : FULL RERUN - READ ONLY AGAINST BOTH INPUTS          */
+/*                                                                    */
+/* MATCHES OUR SETTLEMENT MASTER POSITION AGAINST THE COUNTERPARTY'S */
+/* NETTING STATEMENT FOR EACH OCN/SETTLE PERIOD AND REPORTS THE      */
+/* VARIANCE.  BOTH INPUTS ARE PRE-SORTED BY THE JCL STEP BEFORE THIS */
+/* PROGRAM RUNS - THIS PROGRAM DOES NOT SORT.  UNMATCHED ITEMS ON    */
+/* EITHER SIDE ARE HELD IN A LINKED LIST OF BASED STORAGE BECAUSE    */
+/* THE COUNT IS NOT KNOWN UNTIL BOTH FILES HAVE BEEN READ TO END -   */
+/* A FIXED OCCURS TABLE SIZED FOR THE WORST OBSERVED RUN WOULD WASTE */
+/* REGION ON A NORMAL RUN AND STILL RISK OVERFLOW ON A BAD ONE.      */
+/*                                                                    */
+/* REVISION HISTORY                                                  */
+/*   V1.00  1991-08-19  P.NAIR        INITIAL                        */
+/*   V1.02  1996-03-04  P.NAIR        UNMATCHED LISTS ADDED - BEFORE */
+/*                                    THIS RELEASE ONLY THE VARIANCE */
+/*                                    TOTAL WAS REPORTED, NOT THE    */
+/*                                    INDIVIDUAL UNMATCHED RECORDS   */
+/*   V1.04  2003-04-11  R.OKONKWO     CONTROL RECORD ADDED           */
+/*   V1.06  2009-08-17  A.BUKOWSKI    PAGE HEADING REBUILT FOR THE   */
+/*                                    NEW SETTLEMENT OPS REPORT      */
+/*                                    BINDER FORMAT                  */
+/*   V1.07  2019-05-14  M.OYELARAN    RECOMPILE ONLY, OS PL/I V2     */
+/*                                    OPTIMIZING COMPILER            */
+/*********************************************************************/
+CABSTREC: PROC OPTIONS(MAIN);
+
+   DCL 1 SM_REC,
+         2 SM_OCN            CHAR(4),
+         2 SM_SETTLE_PERIOD  PIC '999999',
+         2 SM_SETTLE_TYPE    CHAR(1),
+         2 SM_RECEIVABLE     FIXED DEC(13,2),
+         2 SM_PAYABLE        FIXED DEC(13,2),
+         2 SM_NET_DUE        FIXED DEC(13,2),
+         2 SM_FILLER         CHAR(20);
+
+   DCL 1 NF_REC,
+         2 NF_OCN            CHAR(4),
+         2 NF_SETTLE_PERIOD  PIC '999999',
+         2 NF_SETTLE_TYPE    CHAR(1),
+         2 NF_THEIR_RECV     FIXED DEC(13,2),
+         2 NF_THEIR_PAY      FIXED DEC(13,2),
+         2 NF_THEIR_NET      FIXED DEC(13,2),
+         2 NF_FILLER         CHAR(20);
+
+   DCL SETLMST FILE RECORD INPUT SEQUENTIAL
+       ENV(FB RECSIZE(90) BLKSIZE(9000));
+   DCL NETTIN  FILE RECORD INPUT SEQUENTIAL
+       ENV(FB RECSIZE(90) BLKSIZE(9000));
+
+   DCL 1 CTL_REC,
+         2 CT_RUN_ID        CHAR(12),
+         2 CT_PROCESS_ID    CHAR(8),
+         2 CT_STEP_SEQ      PIC '999',
+         2 CT_CYCLE_YYDDD   PIC '99999',
+         2 CT_BILL_PERIOD   PIC '999999',
+         2 CT_RERUN_NBR     PIC '99',
+         2 CT_JOBNAME       CHAR(8),
+         2 CT_STEPNAME      CHAR(8),
+         2 CT_READ          FIXED DEC(11),
+         2 CT_WRITTEN       FIXED DEC(11),
+         2 CT_REJECTED      FIXED DEC(11),
+         2 CT_SUMMARISED    FIXED DEC(11),
+         2 CT_CARRIED_FWD   FIXED DEC(11),
+         2 CT_FILLER        CHAR(115);
+
+   DCL CTLOUT FILE RECORD OUTPUT SEQUENTIAL
+       ENV(FB RECSIZE(180) BLKSIZE(18000));
+
+   DCL RECPRT FILE STREAM OUTPUT PRINT;
+
+   /*------------------------------------------------------------*/
+   /* UNMATCHED ITEM LIST - BASED STORAGE, SINGLY LINKED.         */
+   /*------------------------------------------------------------*/
+   DCL 1 UNMATCH_ENTRY BASED(UM_PTR),
+         2 UM_SIDE       CHAR(4),          /* 'OURS' OR 'THEIR'    */
+         2 UM_OCN        CHAR(4),
+         2 UM_PERIOD     PIC '999999',
+         2 UM_AMOUNT     FIXED DEC(13,2),
+         2 UM_NEXT       POINTER;
+
+   DCL UM_PTR      POINTER;
+   DCL UM_HEAD      POINTER INIT(NULL());
+   DCL UM_TAIL      POINTER INIT(NULL());
+   DCL UM_WALK       POINTER;
+
+   DCL SM_EOF   BIT(1) INIT('0'B);
+   DCL NF_EOF   BIT(1) INIT('0'B);
+
+   DCL WS_OUR_CNT      FIXED DEC(9) INIT(0);
+   DCL WS_THEIR_CNT    FIXED DEC(9) INIT(0);
+   DCL WS_MATCHED_CNT  FIXED DEC(9) INIT(0);
+   DCL WS_VARIANCE_CNT FIXED DEC(9) INIT(0);
+   DCL WS_OURS_ONLY    FIXED DEC(9) INIT(0);
+   DCL WS_THEIRS_ONLY  FIXED DEC(9) INIT(0);
+   DCL WS_TOT_OUR_NET   FIXED DEC(15,2) INIT(0);
+   DCL WS_TOT_THEIR_NET FIXED DEC(15,2) INIT(0);
+   DCL WS_TOT_VARIANCE  FIXED DEC(15,2) INIT(0);
+   DCL WS_LINE_CNT     FIXED DEC(5) INIT(99);
+   DCL WS_PAGE_NBR     FIXED DEC(5) INIT(0);
+   DCL WS_VARIANCE     FIXED DEC(13,2);
+
+   DCL (SUBSTR, NULL, ADDR) BUILTIN;
+
+   ON ENDFILE(SETLMST) SM_EOF = '1'B;
+   ON ENDFILE(NETTIN)  NF_EOF = '1'B;
+
+   ON ERROR BEGIN;
+      PUT FILE(RECPRT) EDIT(
+         '*** CABSTREC ABENDED - ONCODE ', ONCODE())
+         (SKIP, A, F(6));
+      SIGNAL ERROR;
+   END;
+
+   CALL P_INIT;
+   CALL P_READ_SM;
+   CALL P_READ_NF;
+
+   /*------------------------------------------------------------*/
+   /* MATCH-MERGE ON OCN/SETTLE PERIOD.  BOTH FILES ARE ASSUMED   */
+   /* PRE-SORTED - THE JCL STEP AHEAD OF THIS ONE FAILS THE JOB IF */
+   /* SORT DETECTS AN OUT OF SEQUENCE CONDITION, SO NO SEQUENCE    */
+   /* CHECK IS REPEATED HERE.                                      */
+   /*------------------------------------------------------------*/
+   DO WHILE (SM_EOF = '0'B & NF_EOF = '0'B);
+      IF SM_OCN || SM_SETTLE_PERIOD = NF_OCN || NF_SETTLE_PERIOD THEN DO;
+         CALL P_REPORT_MATCH;
+         CALL P_READ_SM;
+         CALL P_READ_NF;
+      END;
+      ELSE IF SM_OCN || SM_SETTLE_PERIOD < NF_OCN || NF_SETTLE_PERIOD THEN DO;
+         CALL P_UNMATCHED('OURS', SM_OCN, SM_SETTLE_PERIOD, SM_NET_DUE);
+         WS_OURS_ONLY = WS_OURS_ONLY + 1;
+         CALL P_READ_SM;
+      END;
+      ELSE DO;
+         CALL P_UNMATCHED('THEIR', NF_OCN, NF_SETTLE_PERIOD, NF_THEIR_NET);
+         WS_THEIRS_ONLY = WS_THEIRS_ONLY + 1;
+         CALL P_READ_NF;
+      END;
+   END;
+
+   DO WHILE (SM_EOF = '0'B);
+      CALL P_UNMATCHED('OURS', SM_OCN, SM_SETTLE_PERIOD, SM_NET_DUE);
+      WS_OURS_ONLY = WS_OURS_ONLY + 1;
+      CALL P_READ_SM;
+   END;
+
+   DO WHILE (NF_EOF = '0'B);
+      CALL P_UNMATCHED('THEIR', NF_OCN, NF_SETTLE_PERIOD, NF_THEIR_NET);
+      WS_THEIRS_ONLY = WS_THEIRS_ONLY + 1;
+      CALL P_READ_NF;
+   END;
+
+   CALL P_PRINT_UNMATCHED;
+   CALL P_TERM;
+
+   /*==============================================================*/
+   P_INIT: PROC;
+      OPEN FILE(SETLMST);
+      OPEN FILE(NETTIN);
+      OPEN FILE(CTLOUT) OUTPUT;
+      OPEN FILE(RECPRT) OUTPUT LINESIZE(132) PAGESIZE(60);
+      CALL P_HEADING;
+   END P_INIT;
+
+   /*==============================================================*/
+   P_READ_SM: PROC;
+      READ FILE(SETLMST) INTO(SM_REC);
+      IF SM_EOF = '0'B THEN
+         WS_OUR_CNT = WS_OUR_CNT + 1;
+   END P_READ_SM;
+
+   /*==============================================================*/
+   P_READ_NF: PROC;
+      READ FILE(NETTIN) INTO(NF_REC);
+      IF NF_EOF = '0'B THEN
+         WS_THEIR_CNT = WS_THEIR_CNT + 1;
+   END P_READ_NF;
+
+   /*==============================================================*/
+   /* VARIANCE = OUR NET DUE MINUS THE COUNTERPARTY'S NET.  UNDER   */
+   /* THE NETTING CONVENTION A POSITIVE NET ON BOTH SIDES SHOULD    */
+   /* MEAN THE SAME THING - OUR RECEIVABLE MATCHES THEIR PAYABLE -  */
+   /* SO A ZERO VARIANCE, NOT AN OFFSETTING ONE, IS THE BALANCED    */
+   /* CASE.  SEE CABS-STD-091 FOR THE NETTING SIGN CONVENTION.      */
+   /*==============================================================*/
+   P_REPORT_MATCH: PROC;
+      WS_MATCHED_CNT = WS_MATCHED_CNT + 1;
+      WS_VARIANCE = SM_NET_DUE - NF_THEIR_NET;
+      WS_TOT_OUR_NET = WS_TOT_OUR_NET + SM_NET_DUE;
+      WS_TOT_THEIR_NET = WS_TOT_THEIR_NET + NF_THEIR_NET;
+
+      IF WS_VARIANCE ^= 0 THEN
+         WS_VARIANCE_CNT = WS_VARIANCE_CNT + 1;
+      WS_TOT_VARIANCE = WS_TOT_VARIANCE + WS_VARIANCE;
+
+      IF WS_LINE_CNT >= 55 THEN
+         CALL P_HEADING;
+      PUT FILE(RECPRT) EDIT(
+         SM_OCN, SM_SETTLE_PERIOD, SM_NET_DUE, NF_THEIR_NET, WS_VARIANCE)
+         (SKIP, X(2), A(4), X(3), F(6), X(4), F(14,2), X(4), F(14,2),
+          X(4), F(14,2));
+      WS_LINE_CNT = WS_LINE_CNT + 1;
+   END P_REPORT_MATCH;
+
+   /*==============================================================*/
+   /* ADD AN UNMATCHED ITEM TO THE LINKED LIST.  APPENDED AT THE    */
+   /* TAIL SO THE FINAL PRINT WALKS THE LIST IN ARRIVAL ORDER,      */
+   /* WHICH IS ALSO SORT ORDER SINCE BOTH INPUTS ARE PRE-SORTED.    */
+   /*==============================================================*/
+   P_UNMATCHED: PROC(P_SIDE, P_OCN, P_PERIOD, P_AMOUNT);
+      DCL P_SIDE   CHAR(*);
+      DCL P_OCN    CHAR(4);
+      DCL P_PERIOD PIC '999999';
+      DCL P_AMOUNT FIXED DEC(13,2);
+
+      ALLOCATE UNMATCH_ENTRY SET(UM_PTR);
+      UM_SIDE   = P_SIDE;
+      UM_OCN    = P_OCN;
+      UM_PERIOD = P_PERIOD;
+      UM_AMOUNT = P_AMOUNT;
+      UM_NEXT   = NULL();
+
+      IF UM_HEAD = NULL() THEN DO;
+         UM_HEAD = UM_PTR;
+         UM_TAIL = UM_PTR;
+      END;
+      ELSE DO;
+         UM_TAIL -> UM_NEXT = UM_PTR;
+         UM_TAIL = UM_PTR;
+      END;
+   END P_UNMATCHED;
+
+   /*==============================================================*/
+   P_PRINT_UNMATCHED: PROC;
+      IF UM_HEAD = NULL() THEN DO;
+         PUT FILE(RECPRT) EDIT('NO UNMATCHED ITEMS THIS RUN')
+             (SKIP(2), A);
+         RETURN;
+      END;
+
+      PUT FILE(RECPRT) EDIT('UNMATCHED ITEMS')(SKIP(2), A);
+      PUT FILE(RECPRT) EDIT('SIDE OCN  PERIOD  AMOUNT')
+          (SKIP, A);
+
+      UM_WALK = UM_HEAD;
+      DO WHILE (UM_WALK ^= NULL());
+         UM_PTR = UM_WALK;
+         PUT FILE(RECPRT) EDIT(
+            UM_SIDE, UM_OCN, UM_PERIOD, UM_AMOUNT)
+            (SKIP, X(1), A(5), X(1), A(4), X(1), F(6), X(2), F(14,2));
+         UM_WALK = UM_NEXT;
+      END;
+   END P_PRINT_UNMATCHED;
+
+   /*==============================================================*/
+   P_HEADING: PROC;
+      WS_PAGE_NBR = WS_PAGE_NBR + 1;
+      PUT FILE(RECPRT) PAGE;
+      PUT FILE(RECPRT) EDIT(
+         'CABSTREC - SETTLEMENT RECONCILIATION REPORT',
+         'PAGE', WS_PAGE_NBR)
+         (SKIP, A, COLUMN(90), A, F(5));
+      PUT FILE(RECPRT) EDIT(
+         'OCN  PERIOD  OUR NET DUE      THEIR NET        VARIANCE')
+         (SKIP(2), A);
+      WS_LINE_CNT = 4;
+   END P_HEADING;
+
+   /*==============================================================*/
+   P_TERM: PROC;
+      PUT FILE(RECPRT) EDIT('CONTROL TOTALS')(SKIP(3), A);
+      PUT FILE(RECPRT) EDIT(
+         'OUR RECORDS READ      :', WS_OUR_CNT)(SKIP, A, F(9));
+      PUT FILE(RECPRT) EDIT(
+         'THEIR RECORDS READ    :', WS_THEIR_CNT)(SKIP, A, F(9));
+      PUT FILE(RECPRT) EDIT(
+         'MATCHED PAIRS         :', WS_MATCHED_CNT)(SKIP, A, F(9));
+      PUT FILE(RECPRT) EDIT(
+         'MATCHED WITH VARIANCE :', WS_VARIANCE_CNT)(SKIP, A, F(9));
+      PUT FILE(RECPRT) EDIT(
+         'OURS ONLY, UNMATCHED  :', WS_OURS_ONLY)(SKIP, A, F(9));
+      PUT FILE(RECPRT) EDIT(
+         'THEIRS ONLY, UNMATCHED:', WS_THEIRS_ONLY)(SKIP, A, F(9));
+      PUT FILE(RECPRT) EDIT(
+         'TOTAL VARIANCE AMOUNT :', WS_TOT_VARIANCE)(SKIP, A, F(15,2));
+
+      CT_RUN_ID      = 'STRECRUN001 ';
+      CT_PROCESS_ID  = 'CABSTREC';
+      CT_STEP_SEQ    = 10;
+      CT_CYCLE_YYDDD = 0;
+      CT_BILL_PERIOD = 0;
+      CT_RERUN_NBR   = 0;
+      CT_JOBNAME     = 'SETP0530';
+      CT_STEPNAME    = 'STEP010';
+      CT_READ        = WS_OUR_CNT + WS_THEIR_CNT;
+      CT_WRITTEN     = WS_MATCHED_CNT * 2;
+      CT_REJECTED    = 0;
+      CT_SUMMARISED  = 0;
+      CT_CARRIED_FWD = WS_OURS_ONLY + WS_THEIRS_ONLY;
+      CT_FILLER      = ' ';
+      WRITE FILE(CTLOUT) FROM(CTL_REC);
+
+      CLOSE FILE(SETLMST);
+      CLOSE FILE(NETTIN);
+      CLOSE FILE(CTLOUT);
+      CLOSE FILE(RECPRT);
+   END P_TERM;
+
+END CABSTREC;

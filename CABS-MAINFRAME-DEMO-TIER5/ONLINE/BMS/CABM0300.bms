@@ -1,0 +1,92 @@
+*****************************************************************
+* CABM0300 - INVOICE INQUIRY MAPSET FOR CAB2 (CABONL03)         *
+* HEADER FROM TELCABS.CABS.BILLHDR, DETAIL LINES BROWSED FROM   *
+* TELCABS.CABS.BILLDTL.  FIVE DETAIL LINES PER SCREEN, PAGED    *
+* WITH PF7/PF8.  ORIGINAL 1992 VINTAGE - NO COLOR/HILIGHT.      *
+*                                                                 *
+* REVISION HISTORY                                                *
+*   V1.00  1992-02-11  R.KESSLER    INITIAL                      *
+*   V1.01  1998-09-30  D.OYELARAN   JURISDICTION SPLIT ADDED      *
+*                                   TO HEADER (STATE PUC AUDIT)   *
+*   V1.02  2011-06-09  M.OYELARAN   RECOMPILE ONLY                *
+*****************************************************************
+         PRINT NOGEN
+CABM03   DFHMSD TYPE=&SYSPARM,MODE=INOUT,LANG=COBOL,STORAGE=AUTO,     X
+               TIOAPFX=YES,CTRL=(FREEKB,FRSET),EXTATT=MAPONLY
+*
+BILLMAP  DFHMDI SIZE=(24,80),LINE=1,COLUMN=1
+*
+         DFHMDF POS=(1,1),LENGTH=4,ATTRB=(ASKIP,NORM),INITIAL='CAB2'
+         DFHMDF POS=(1,10),LENGTH=20,ATTRB=(ASKIP,NORM),             X
+               INITIAL='INVOICE INQUIRY'
+CDAT     DFHMDF POS=(1,70),LENGTH=8,ATTRB=(ASKIP,NORM)
+*
+         DFHMDF POS=(2,1),LENGTH=5,ATTRB=(ASKIP,NORM),INITIAL='BAN=>'
+BAN      DFHMDF POS=(2,7),LENGTH=13,ATTRB=(UNPROT,IC,FSET)
+         DFHMDF POS=(2,25),LENGTH=6,ATTRB=(ASKIP,NORM),              X
+               INITIAL='PERIOD'
+PERD     DFHMDF POS=(2,32),LENGTH=6,ATTRB=(UNPROT,FSET,NUM),         X
+               PICIN='999999',PICOUT='999999'
+*
+INVN     DFHMDF POS=(4,1),LENGTH=14,ATTRB=(ASKIP,NORM)
+BDAT     DFHMDF POS=(4,20),LENGTH=8,ATTRB=(ASKIP,NORM)
+DDAT     DFHMDF POS=(4,32),LENGTH=8,ATTRB=(ASKIP,NORM)
+STAT     DFHMDF POS=(4,44),LENGTH=1,ATTRB=(ASKIP,NORM)
+*
+         DFHMDF POS=(5,1),LENGTH=10,ATTRB=(ASKIP,NORM),              X
+               INITIAL='PRIOR BAL.'
+PBAL     DFHMDF POS=(5,12),LENGTH=15,ATTRB=(ASKIP,NORM),             X
+               PICOUT='---,---,---.99'
+         DFHMDF POS=(5,30),LENGTH=10,ATTRB=(ASKIP,NORM),             X
+               INITIAL='PAYMENTS..'
+PYMT     DFHMDF POS=(5,41),LENGTH=15,ATTRB=(ASKIP,NORM),             X
+               PICOUT='---,---,---.99'
+         DFHMDF POS=(6,1),LENGTH=10,ATTRB=(ASKIP,NORM),              X
+               INITIAL='ADJUSTMTS.'
+ADJT     DFHMDF POS=(6,12),LENGTH=15,ATTRB=(ASKIP,NORM),             X
+               PICOUT='---,---,---.99'
+         DFHMDF POS=(6,30),LENGTH=10,ATTRB=(ASKIP,NORM),             X
+               INITIAL='CURR USAGE'
+CURU     DFHMDF POS=(6,41),LENGTH=15,ATTRB=(ASKIP,NORM),             X
+               PICOUT='---,---,---.99'
+         DFHMDF POS=(7,1),LENGTH=10,ATTRB=(ASKIP,NORM),              X
+               INITIAL='TOTAL DUE.'
+TOTD     DFHMDF POS=(7,12),LENGTH=15,ATTRB=(ASKIP,BRT),              X
+               PICOUT='---,---,---.99'
+*
+         DFHMDF POS=(9,1),LENGTH=79,ATTRB=(ASKIP,NORM),              X
+               INITIAL='SEC  DESCRIPTION                        AMX
+               OUNT           '
+*
+DSEC1    DFHMDF POS=(10,1),LENGTH=2,ATTRB=(ASKIP,NORM)
+DDSC1    DFHMDF POS=(10,5),LENGTH=36,ATTRB=(ASKIP,NORM)
+DAMT1    DFHMDF POS=(10,42),LENGTH=15,ATTRB=(ASKIP,NORM),            X
+               PICOUT='---,---,---.99'
+DSEC2    DFHMDF POS=(11,1),LENGTH=2,ATTRB=(ASKIP,NORM)
+DDSC2    DFHMDF POS=(11,5),LENGTH=36,ATTRB=(ASKIP,NORM)
+DAMT2    DFHMDF POS=(11,42),LENGTH=15,ATTRB=(ASKIP,NORM),            X
+               PICOUT='---,---,---.99'
+DSEC3    DFHMDF POS=(12,1),LENGTH=2,ATTRB=(ASKIP,NORM)
+DDSC3    DFHMDF POS=(12,5),LENGTH=36,ATTRB=(ASKIP,NORM)
+DAMT3    DFHMDF POS=(12,42),LENGTH=15,ATTRB=(ASKIP,NORM),            X
+               PICOUT='---,---,---.99'
+DSEC4    DFHMDF POS=(13,1),LENGTH=2,ATTRB=(ASKIP,NORM)
+DDSC4    DFHMDF POS=(13,5),LENGTH=36,ATTRB=(ASKIP,NORM)
+DAMT4    DFHMDF POS=(13,42),LENGTH=15,ATTRB=(ASKIP,NORM),            X
+               PICOUT='---,---,---.99'
+DSEC5    DFHMDF POS=(14,1),LENGTH=2,ATTRB=(ASKIP,NORM)
+DDSC5    DFHMDF POS=(14,5),LENGTH=36,ATTRB=(ASKIP,NORM)
+DAMT5    DFHMDF POS=(14,42),LENGTH=15,ATTRB=(ASKIP,NORM),            X
+               PICOUT='---,---,---.99'
+*
+PAGN     DFHMDF POS=(16,1),LENGTH=15,ATTRB=(ASKIP,NORM)
+*
+         DFHMDF POS=(23,1),LENGTH=1,ATTRB=(ASKIP,NORM),INITIAL='*'
+MSGL     DFHMDF POS=(23,3),LENGTH=76,ATTRB=(ASKIP,BRT)
+*
+         DFHMDF POS=(24,1),LENGTH=79,ATTRB=(ASKIP,NORM),             X
+               INITIAL='PF3=EXIT  PF7=BACKWARD  PF8=FORWARD  PF12=MEX
+               NU'
+*
+         DFHMSD TYPE=FINAL
+         END

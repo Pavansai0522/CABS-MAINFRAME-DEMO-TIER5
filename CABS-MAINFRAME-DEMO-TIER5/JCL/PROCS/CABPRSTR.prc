@@ -1,0 +1,13 @@
+//CABPRSTR PROC RSTEP=,RERUN=N,CYCLE=000000,RUNID=00
+//*****************************************************************
+//* CABPRSTR - RESTART PROC.  HONOURS &RSTEP (THE STEP NAME TO   *
+//* RESUME FROM) AND &RERUN (Y/N).  WHEN RERUN=Y THE COND CODE   *
+//* CHECK BELOW IS SKIPPED SO A CLEAN RE-DRIVE DOES NOT ABEND    *
+//* ON LEFTOVER CONDITION CODES FROM THE FAILED ATTEMPT.         *
+//*****************************************************************
+//STEP1    EXEC PGM=CABABEND,REGION=1M,
+//             PARM='&RSTEP,&RERUN,&CYCLE,&RUNID',
+//             COND=(0,EQ)
+//STEPLIB  DD DSN=TELCABS.CABS.LOADLIB,DISP=SHR
+//         DD DSN=TELCABS.COMMON.LOADLIB,DISP=SHR
+//SYSOUT   DD SYSOUT=*

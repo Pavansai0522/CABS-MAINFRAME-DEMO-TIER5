@@ -1,0 +1,136 @@
+/* REXX */
+/*********************************************************************/
+/* CABCTLXT - EXTRACT AND BALANCE A CABSCTL CONTROL RECORD           */
+/* APPLICATION : CABS | SETL                                        */
+/* INPUTS      : TELCABS.CABS.CONTROL(0)  (CABSCTL LAYOUT, LRECL 180)*/
+/* OUTPUTS     : SYSTSPRT - BALANCING REPORT                         */
+/* CONTROL     : NONE - THIS EXEC READS CONTROL RECORDS, IT DOES NOT */
+/*               WRITE ONE                                           */
+/* RESTART     : RERUNNABLE - READ ONLY                              */
+/*                                                                    */
+/* PULLS THE FIVE PACKED COUNT FIELDS OUT OF THE MOST RECENT         */
+/* CABSCTL RECORD IN THE CURRENT GENERATION OF THE CONTROL DATASET   */
+/* AND CHECKS THE BALANCING EQUATION FROM COPYBOOKS/CABSCTL.CPY:     */
+/*   CT-READ = CT-WRITTEN + CT-REJECTED + CT-SUMMARISED               */
+/*            + CT-CARRIED-FWD                                        */
+/* REXX HAS NO NATIVE COMP-3 SUPPORT, SO THE PACKED FIELDS ARE       */
+/* UNPACKED BY HAND - C2X TO GET THE HEX DIGITS, THEN A NIBBLE WALK  */
+/* TO SEPARATE THE SIGN NIBBLE FROM THE DIGIT STRING.  SEE           */
+/* CABS-STD-033 FOR THE OFFSET TABLE THIS EXEC IS BUILT FROM; THE    */
+/* OFFSETS ARE HARDCODED HERE RATHER THAN COMPUTED FROM A COPYBOOK   */
+/* BECAUSE REXX HAS NO COBOL COPYBOOK PARSER AVAILABLE ON THIS       */
+/* SYSTEM.                                                            */
+/*                                                                    */
+/* REVISION HISTORY                                                  */
+/*   V1.00  1995-02-08  P.NAIR        INITIAL                        */
+/*   V1.01  1999-10-04  P.NAIR        OFFSETS RECHECKED AGAINST      */
+/*                                    CABSCTL AFTER THE HASH TOTAL   */
+/*                                    FIELDS WERE ADDED TO THE       */
+/*                                    COPYBOOK                       */
+/*   V1.02  2009-08-17  A.BUKOWSKI    NEGATIVE COUNT DISPLAY FIXED - */
+/*                                    A CARRIED-FORWARD COUNT CAN BE */
+/*                                    NEGATIVE ON A REVERSED RUN AND */
+/*                                    WAS PRINTING WITHOUT THE SIGN  */
+/*   V1.03  2018-01-22  L.FERREIRA    RUN ID AND PROCESS ID ADDED TO */
+/*                                    THE REPORT HEADING             */
+/*********************************************************************/
+
+CTLDS = "'TELCABS.CABS.CONTROL(0)'"
+
+ADDRESS TSO
+"ALLOC F(CTLIN) DA("CTLDS") SHR REUSE"
+IF RC <> 0 THEN DO
+  SAY 'CABCTLXT - ALLOC FAILED ON' CTLDS 'RC='RC
+  EXIT RC
+END
+
+"EXECIO * DISKR CTLIN (STEM CTL. FINIS)"
+IF RC > 4 THEN DO
+  SAY 'CABCTLXT - EXECIO READ FAILED, RC='RC
+  "FREE F(CTLIN)"
+  EXIT RC
+END
+"FREE F(CTLIN)"
+
+IF CTL.0 = 0 THEN DO
+  SAY 'CABCTLXT - CONTROL DATASET IS EMPTY'
+  EXIT 8
+END
+
+/* THE MOST RECENT RECORD IS THE ONE WE BALANCE - THE CONTROL FILE   */
+/* IS EXTEND-ONLY, SO THE LAST RECORD IN THE CURRENT GENERATION IS   */
+/* THE LAST STEP THAT RAN.                                           */
+REC = CTL.CTL.0
+
+/*-------------------------------------------------------------------*/
+/* CABSCTL BYTE OFFSETS (1-BASED, PER CABS-STD-033)                  */
+/*   CT-RUN-ID          1-12                                         */
+/*   CT-PROCESS-ID      13-20                                        */
+/*   CT-STEP-SEQ        21-23                                        */
+/*   CT-CYCLE-YYDDD     24-28                                        */
+/*   CT-BILL-PERIOD     29-34                                        */
+/*   CT-RERUN-NBR       35-36                                        */
+/*   CT-JOBNAME         37-44                                        */
+/*   CT-STEPNAME        45-52                                        */
+/*   CT-READ            53-58   (COMP-3, 6 BYTES)                    */
+/*   CT-WRITTEN         59-64   (COMP-3, 6 BYTES)                    */
+/*   CT-REJECTED        65-70   (COMP-3, 6 BYTES)                    */
+/*   CT-SUMMARISED      71-76   (COMP-3, 6 BYTES)                    */
+/*   CT-CARRIED-FWD     77-82   (COMP-3, 6 BYTES)                    */
+/*-------------------------------------------------------------------*/
+RUNID    = STRIP(SUBSTR(REC,1,12))
+PROCID   = STRIP(SUBSTR(REC,13,8))
+STEPSEQ  = STRIP(SUBSTR(REC,21,3))
+JOBNM    = STRIP(SUBSTR(REC,37,8))
+STEPNM   = STRIP(SUBSTR(REC,45,8))
+
+CT_READ  = UNPK3(SUBSTR(REC,53,6))
+CT_WRTN  = UNPK3(SUBSTR(REC,59,6))
+CT_REJ   = UNPK3(SUBSTR(REC,65,6))
+CT_SUMM  = UNPK3(SUBSTR(REC,71,6))
+CT_CFWD  = UNPK3(SUBSTR(REC,77,6))
+
+RHS = CT_WRTN + CT_REJ + CT_SUMM + CT_CFWD
+
+SAY 'CABCTLXT - CABSCTL BALANCING REPORT'
+SAY '  RUN ID      :' RUNID
+SAY '  PROCESS ID  :' PROCID
+SAY '  STEP SEQ    :' STEPSEQ
+SAY '  JOBNAME     :' JOBNM
+SAY '  STEPNAME    :' STEPNM
+SAY ' '
+SAY '  CT-READ         =' RIGHT(CT_READ,15)
+SAY '  CT-WRITTEN      =' RIGHT(CT_WRTN,15)
+SAY '  CT-REJECTED     =' RIGHT(CT_REJ,15)
+SAY '  CT-SUMMARISED   =' RIGHT(CT_SUMM,15)
+SAY '  CT-CARRIED-FWD  =' RIGHT(CT_CFWD,15)
+SAY '  ------------------------------------------'
+SAY '  SUM OF THE FOUR =' RIGHT(RHS,15)
+SAY ' '
+
+IF CT_READ = RHS THEN DO
+  SAY '  IN BALANCE - CT-READ MATCHES THE SUM OF THE OTHER FOUR'
+  EXIT 0
+END
+ELSE DO
+  SAY '  *** OUT OF BALANCE ***  DIFFERENCE =' (CT_READ - RHS)
+  EXIT 8
+END
+
+/*=====================================================================*/
+UNPK3: PROCEDURE
+/* UNPACK A COMP-3 FIELD FROM ITS RAW EBCDIC BYTE STRING.  C2X TURNS   */
+/* THE BYTES INTO HEX PAIRS; EACH PAIR IS TWO PACKED DECIMAL DIGITS    */
+/* EXCEPT THE LAST NIBBLE OF THE FIELD, WHICH IS THE SIGN - C OR F     */
+/* MEANS POSITIVE, D MEANS NEGATIVE.  THE NIBBLE WALK BELOW STRIPS     */
+/* LEADING ZERO DIGITS PRODUCED BY THE COMP-3 STORAGE SLACK.           */
+  PARSE ARG RAWFLD
+  HEXSTR = C2X(RAWFLD)
+  SIGNNIB = RIGHT(HEXSTR,1)
+  DIGITSTR = LEFT(HEXSTR,LENGTH(HEXSTR)-1)
+  DIGITSTR = STRIP(DIGITSTR,'L','0')
+  IF DIGITSTR = '' THEN DIGITSTR = '0'
+  IF SIGNNIB = 'D' THEN
+    RETURN '-'DIGITSTR
+  ELSE
+    RETURN DIGITSTR

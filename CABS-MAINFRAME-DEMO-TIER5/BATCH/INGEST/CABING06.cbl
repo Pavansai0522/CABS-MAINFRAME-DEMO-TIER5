@@ -1,0 +1,572 @@
+      *****************************************************************
+      * CABING06 - CIRCUIT AND TRUNK GROUP RESOLUTION                 *
+      * APPLICATION : CABS                                            *
+      * INPUTS      : DDNAME  DSN                          COPYBOOK   *
+      *               CLNIN   TELCABS.CABS.USAGE.CLEAN(0)  CABSCDR    *
+      *               CIRCMST TELCABS.CABS.CIRCUIT VSAM    CABSCIRC   *
+      * OUTPUTS     : DDNAME  DSN                          COPYBOOK   *
+      *               ENROUT  TELCABS.CABS.USAGE.ENRICH(+1) (LOCAL)   *
+      *               SUSOUT  TELCABS.CABS.USAGE.SUSPENSE(+1) CABSERR *
+      * CONTROL     : CTLOUT                               CABSCTL    *
+      * BALANCE     : CT-READ = CT-WRITTEN + CT-REJECTED +            *
+      *               CT-SUMMARISED + CT-CARRIED-FWD                  *
+      * RESTART     : RESTARTABLE FROM CT-RESTART-KEY                 *
+      * REVISION HISTORY                                              *
+      *   V1.00  1988-02-19  R.T.WHEELER  INITIAL - DATA/SPCL ONLY    *
+      *   V1.02  1990-07-03  R.T.WHEELER  ADDED VOICE TRUNK RESOLVE   *
+      *   V1.05  1994-11-28  D.OKONKWO    CLLI SEGMENT PARSE ADDED    *
+      *   V1.08  1997-05-14  J.M.CASTILLO MPB AUTOMATIC SPLIT ADDED   *
+      *   V2.00  1999-01-09  P.NAIR       Y2K PIVOT REVIEW - OK       *
+      *   V2.03  2004-08-30  A.BUKOWSKI   DISC DATE EDIT TIGHTENED    *
+      *   V2.06  2011-03-17  S.MARCHETTI  TRUNK XREF TABLE SIZE 200   *
+      *   V2.09  2019-06-04  T.VANCE      RECOMPILE ONLY - LE V7      *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID.    CABING06.
+       AUTHOR.        RADIANT-CABS-TEAM.
+       ENVIRONMENT DIVISION.
+       CONFIGURATION SECTION.
+       SOURCE-COMPUTER. IBM-Z15.
+       OBJECT-COMPUTER. IBM-Z15.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT CLNIN  ASSIGN TO CLNIN
+               ORGANIZATION SEQUENTIAL FILE STATUS WS-FS-INPUT.
+           SELECT CIRCMST ASSIGN TO CIRCMST
+               ORGANIZATION IS INDEXED ACCESS MODE IS DYNAMIC
+               RECORD KEY IS CI-CIRCUIT-ID
+               FILE STATUS IS WS-FS-TABLE.
+           SELECT ENROUT ASSIGN TO ENROUT
+               ORGANIZATION SEQUENTIAL FILE STATUS WS-FS-OUTPUT.
+           SELECT SUSOUT ASSIGN TO SUSOUT
+               ORGANIZATION SEQUENTIAL FILE STATUS WS-FS-SUSPENSE.
+           SELECT CTLOUT ASSIGN TO CTLOUT
+               ORGANIZATION SEQUENTIAL FILE STATUS WS-FS-CONTROL.
+       DATA DIVISION.
+       FILE SECTION.
+       FD  CLNIN
+           RECORDING MODE IS F
+           RECORD CONTAINS 200 CHARACTERS
+           LABEL RECORDS ARE STANDARD.
+           COPY CABSCDR.
+       FD  CIRCMST
+           RECORDING MODE IS F
+           RECORD CONTAINS 120 CHARACTERS
+           LABEL RECORDS ARE STANDARD.
+           COPY CABSCIRC.
+       FD  ENROUT
+           RECORDING MODE IS F
+           RECORD CONTAINS 200 CHARACTERS
+           LABEL RECORDS ARE STANDARD.
+       01  CABS-ENROUT-RECORD.
+           05  EO-KEY.
+               10  EO-OCN                  PIC X(04).
+               10  EO-BAN                  PIC X(13).
+               10  EO-SEQ-NBR              PIC 9(09) COMP-3.
+           05  EO-RECORD-CTL.
+               10  EO-REC-TYPE             PIC X(02).
+               10  EO-USAGE-TYPE           PIC X(01).
+               10  EO-JURIS-CD             PIC X(01).
+               10  EO-RATE-ELEM            PIC X(06).
+           05  EO-DATE-TIME.
+               10  EO-CONN-YYDDD           PIC 9(05).
+               10  EO-CONN-HHMMSS          PIC 9(06).
+               10  EO-DISC-YYDDD           PIC 9(05).
+               10  EO-DISC-HHMMSS          PIC 9(06).
+           05  EO-VARIANT-AREA             PIC X(96).
+           05  EO-ENRICHMENT.
+               10  EO-RESOLVED-OCN         PIC X(04).
+               10  EO-RESOLVED-BAN         PIC X(13).
+               10  EO-RESOLVED-STATE       PIC X(02).
+               10  EO-CIRCUIT-STATUS       PIC X(01).
+               10  EO-MPB-APPLIED-SW       PIC X(01).
+               10  EO-FILLER               PIC X(29).
+       FD  SUSOUT
+           RECORDING MODE IS F
+           RECORD CONTAINS 300 CHARACTERS
+           LABEL RECORDS ARE STANDARD.
+       01  SUSOUT-RECORD                   PIC X(300).
+       FD  CTLOUT
+           RECORDING MODE IS F RECORD CONTAINS 180 CHARACTERS
+           LABEL RECORDS ARE STANDARD.
+       01  CTLOUT-RECORD                   PIC X(180).
+       WORKING-STORAGE SECTION.
+      * STANDARD ESTATE WORKING STORAGE (COUNTERS/SWITCHES/DATE/CTL)
+           COPY CABSWRK.
+      * TRUNK XREF TABLE - LOADED FROM CIRCMST BY P1200, RESOLVES
+      * VOICE RECORDS (CD-VC-TRUNK-GRP) TO A CIRCUIT.
+       01  WS-TRUNK-XREF-TABLE.
+           05  WS-TX-ENTRY OCCURS 200 TIMES.
+               10  WS-TX-TRUNK-GRP         PIC X(08).
+               10  WS-TX-OCN               PIC X(04).
+               10  WS-TX-BAN               PIC X(13).
+               10  WS-TX-STATE             PIC X(02).
+               10  WS-TX-CIRCUIT-ID        PIC X(20).
+               10  WS-TX-STATUS            PIC X(01).
+       01  WS-TRUNK-XREF-CTL.
+           05  WS-TX-COUNT                 PIC S9(04) COMP-3 VALUE 0.
+           05  WS-TX-MAX                   PIC S9(04) COMP-3
+                                                          VALUE 200.
+           05  WS-TX-SUB                   PIC S9(04) COMP-3 VALUE 0.
+           05  WS-TX-FOUND-SW              PIC X(01) VALUE 'N'.
+               88  WS-TX-FOUND             VALUE 'Y'.
+      * CLLI SEGMENT SCAN AREA - CABS-STD-023.  NO REFERENCE MOD.
+      * 20-BYTE CIRCUIT ID WALKED CHAR BY CHAR VIA SUBSCRIPTED OCCURS.
+      * EACH SEGMENT IS ALSO A CHAR TABLE, BUILT ONE BYTE AT A TIME.
+       01  WS-CLLI-RAW-AREA.
+           05  WS-CLLI-RAW                 PIC X(20).
+       01  WS-CLLI-CHAR-TABLE REDEFINES WS-CLLI-RAW-AREA.
+           05  WS-CLLI-CHAR OCCURS 20 TIMES PIC X(01).
+       01  WS-CLLI-SCAN-CTL.
+           05  WS-CLLI-SLASH-CNT           PIC S9(02) COMP-3 VALUE 0.
+           05  WS-CLLI-SUB                 PIC S9(02) COMP-3 VALUE 0.
+       01  WS-CLLI-REGION-AREA.
+           05  WS-CLLI-REGION-CD           PIC X(02).
+       01  WS-CLLI-REGION-TBL REDEFINES WS-CLLI-REGION-AREA.
+           05  WS-CLLI-REGION-CHAR OCCURS 2 TIMES PIC X(01).
+       01  WS-CLLI-CITY-AREA.
+           05  WS-CLLI-CITY-CD             PIC X(04).
+       01  WS-CLLI-CITY-TBL REDEFINES WS-CLLI-CITY-AREA.
+           05  WS-CLLI-CITY-CHAR OCCURS 4 TIMES PIC X(01).
+       01  WS-CLLI-STATE-AREA.
+           05  WS-CLLI-STATE-CD            PIC X(02).
+       01  WS-CLLI-STATE-TBL REDEFINES WS-CLLI-STATE-AREA.
+           05  WS-CLLI-STATE-CHAR OCCURS 2 TIMES PIC X(01).
+       01  WS-CLLI-BLDG-AREA.
+           05  WS-CLLI-BLDG-CD             PIC X(01).
+       01  WS-CLLI-NETWORK-AREA.
+           05  WS-CLLI-NETWORK-CD          PIC X(06).
+       01  WS-CLLI-NETWORK-TBL REDEFINES WS-CLLI-NETWORK-AREA.
+           05  WS-CLLI-NETWORK-CHAR OCCURS 6 TIMES PIC X(01).
+       01  WS-CLLI-EQUIP-AREA.
+           05  WS-CLLI-EQUIP-CD            PIC X(03).
+       01  WS-CLLI-EQUIP-TBL REDEFINES WS-CLLI-EQUIP-AREA.
+           05  WS-CLLI-EQUIP-CHAR OCCURS 3 TIMES PIC X(01).
+      * DIRECT CIRCUIT LOOKUP WORK AREA - DATA / SPECIAL ACCESS
+       01  WS-CIRCUIT-LOOKUP-KEY.
+           05  WS-CL-CIRCUIT-ID            PIC X(20).
+       01  WS-CIRCUIT-LOOKUP-SW.
+           05  WS-CL-FOUND-SW              PIC X(01) VALUE 'N'.
+               88  WS-CL-FOUND             VALUE 'Y'.
+           05  WS-CL-DISC-SW               PIC X(01) VALUE 'N'.
+               88  WS-CL-DISCONNECTED      VALUE 'Y'.
+       01  WS-LOOKUP-COUNTERS.
+           05  WS-DIRECT-LOOKUP-CNT        PIC S9(07) COMP-3 VALUE 0.
+           05  WS-VOICE-LOOKUP-CNT         PIC S9(07) COMP-3 VALUE 0.
+           05  WS-TABLE-MISS-CNT           PIC S9(07) COMP-3 VALUE 0.
+      * MPB AUTOMATIC SPLIT CONTROL.  WS-MPB-AUTO-SW IS SET FROM
+      * THE CIRCUIT CONTROL CARD AT INSTALLATION TIME.
+       01  WS-MPB-CONTROL.
+           05  WS-MPB-AUTO-SW              PIC X(01) VALUE 'N'.
+               88  WS-MPB-AUTO-ON          VALUE 'Y'.
+               88  WS-MPB-AUTO-OFF         VALUE 'N'.
+       01  WS-MPB-WORK-AREA.
+           05  WS-MPB-OUR-PCT              PIC S9(03)V9(05) COMP-3.
+           05  WS-MPB-OTHER-PCT            PIC S9(03)V9(05) COMP-3.
+           05  WS-MPB-OTHER-OCN            PIC X(04).
+           05  WS-MPB-OUR-MOU              PIC S9(07)V9(02) COMP-3.
+           05  WS-MPB-OTHER-MOU            PIC S9(07)V9(02) COMP-3.
+      * ENRICHMENT AND SUSPENSE STAGING AREAS
+       01  WS-ENRICH-STAGE-AREA.
+           05  WS-ENR-OCN                  PIC X(04).
+           05  WS-ENR-BAN                  PIC X(13).
+           05  WS-ENR-STATE                PIC X(02).
+           05  WS-ENR-CIRC-STATUS          PIC X(01).
+           05  WS-ENR-MPB-APPLIED          PIC X(01).
+       01  WS-SUSPENSE-STAGE-AREA.
+           05  WS-SUS-RUN-ID               PIC X(12).
+           05  WS-SUS-DETECT-PGM           PIC X(08) VALUE 'CABING06'.
+      * DATE COMPARE WORK AREA - CIRCUIT DISCONNECT VS RUN DATE
+       01  WS-DISC-COMPARE-AREA.
+           05  WS-DISC-YYDDD               PIC 9(05).
+           05  WS-DISC-DAYS-DIFF           PIC S9(07) COMP-3.
+           05  WS-RUN-YYDDD                PIC 9(05).
+      * RUN STATISTICS BY USAGE TYPE
+       01  WS-RUN-STATISTICS.
+           05  WS-VOICE-CNT                PIC S9(07) COMP-3 VALUE 0.
+           05  WS-DATA-CNT                 PIC S9(07) COMP-3 VALUE 0.
+           05  WS-SPCL-CNT                 PIC S9(07) COMP-3 VALUE 0.
+           05  WS-MPB-APPLIED-CNT          PIC S9(07) COMP-3 VALUE 0.
+           05  WS-UNKNOWN-TYPE-CNT         PIC S9(07) COMP-3 VALUE 0.
+      * MISCELLANEOUS PROGRAM CONSTANTS, ABEND AND DISPLAY AREAS
+       01  WS-PROGRAM-CONSTANTS.
+           05  WS-PGM-NAME                 PIC X(08) VALUE 'CABING06'.
+           05  WS-PROCESS-ID               PIC X(08) VALUE 'ING06   '.
+       01  WS-CALL-PARM-AREA.
+           05  WS-CP-DATE-IN               PIC 9(05).
+           05  WS-CP-DATE-OUT              PIC 9(08).
+           05  WS-CP-RC                    PIC S9(04) COMP-3.
+           05  WS-CP-OCN                   PIC X(04).
+           05  WS-CP-VALID-SW              PIC X(01).
+           05  WS-CP-HASH-FIELD            PIC S9(15)V9(02) COMP-3.
+       01  WS-ABEND-WORK-AREA.
+           05  WS-ABEND-MSG                PIC X(60).
+       01  WS-DISPLAY-WORK-AREA.
+           05  WS-DISPLAY-LINE             PIC X(80).
+       01  WS-CONTROL-TOTALS-STAGE.
+           05  WS-CT-BAL-CHECK             PIC S9(11) COMP-3 VALUE 0.
+       01  WS-CDR-STAGE-VOICE.
+           05  WS-CDR-STG-CHG-MIN          PIC S9(07)V9(02) COMP-3.
+       01  WS-CDR-STAGE-DATA.
+           05  WS-CDR-STG-OCTETS           PIC S9(15) COMP-3.
+       01  WS-CDR-STAGE-SPCL.
+           05  WS-CDR-STG-QTY              PIC S9(05) COMP-3.
+       01  WS-TIMESTAMP-AREA.
+           05  WS-JOB-START-TIME           PIC X(08).
+           05  WS-JOB-END-TIME             PIC X(08).
+       01  WS-EDIT-SWITCHES.
+           05  WS-EDIT-OK-SW               PIC X(01) VALUE 'Y'.
+               88  WS-EDIT-OK              VALUE 'Y'.
+       01  WS-CIRCUIT-TYPE-COUNTS.
+           05  WS-SWITCHED-CIRC-CNT        PIC S9(05) COMP-3 VALUE 0.
+           05  WS-SPECIAL-CIRC-CNT         PIC S9(05) COMP-3 VALUE 0.
+       01  WS-RESTART-WORK-AREA.
+           05  WS-RESTART-KEY-SAVE         PIC X(26).
+       PROCEDURE DIVISION.
+       S100-MAINLINE SECTION.
+       P0000-MAINLINE.
+           PERFORM P1000-INIT THRU P1000-EXIT.
+           PERFORM P2000-PROCESS THRU P2000-EXIT
+               UNTIL WS-EOF.
+           PERFORM P8000-CONTROL THRU P8000-EXIT.
+           PERFORM P9000-TERM THRU P9000-EXIT.
+           STOP RUN.
+       S200-INITIALIZATION SECTION.
+       P1000-INIT.
+           PERFORM P1100-OPEN-FILES THRU P1100-EXIT.
+           CALL 'CABPARMR' USING DW-CURRENT-YYDDD.
+           PERFORM P1200-LOAD-TRUNK-XREF THRU P1200-EXIT.
+           MOVE 'CABS06RUN001' TO WS-SUS-RUN-ID.
+           MOVE 'N' TO WS-EOF-SW.
+           PERFORM P7000-READ-CLNIN THRU P7000-EXIT.
+       P1000-EXIT.
+           EXIT.
+       P1100-OPEN-FILES.
+           OPEN INPUT  CLNIN.
+           OPEN INPUT  CIRCMST.
+           OPEN OUTPUT ENROUT.
+           OPEN OUTPUT SUSOUT.
+           OPEN OUTPUT CTLOUT.
+           IF WS-FS-INPUT NOT = '00'
+               DISPLAY 'CABING06 - CLNIN OPEN FAILED ' WS-FS-INPUT
+               CALL 'CABABEND' USING CT-ABEND-CD.
+       P1100-EXIT.
+           EXIT.
+      * P1200 BROWSES CIRCMST FROM LOW KEY AND BUILDS THE IN-STORAGE
+      * TRUNK XREF.  ONLY CI-SWITCHED CIRCUITS CARRY A TRUNK GROUP.
+       P1200-LOAD-TRUNK-XREF.
+           MOVE LOW-VALUES TO CI-CIRCUIT-ID.
+           START CIRCMST KEY IS NOT LESS THAN CI-CIRCUIT-ID
+               INVALID KEY
+                   MOVE 'Y' TO WS-EOF-SW.
+           IF WS-EOF
+               MOVE 'N' TO WS-EOF-SW
+               GO TO P1200-EXIT.
+           PERFORM P1210-BROWSE-NEXT THRU P1210-EXIT
+               UNTIL WS-EOF
+               OR WS-TX-COUNT NOT < WS-TX-MAX.
+           MOVE 'N' TO WS-EOF-SW.
+       P1200-EXIT.
+           EXIT.
+       P1210-BROWSE-NEXT.
+           READ CIRCMST NEXT RECORD
+               AT END
+                   MOVE 'Y' TO WS-EOF-SW.
+           IF WS-EOF
+               GO TO P1210-EXIT.
+           IF NOT CI-SWITCHED
+               GO TO P1210-EXIT.
+           ADD 1 TO WS-TX-COUNT.
+           MOVE CI-TRUNK-GRP  TO WS-TX-TRUNK-GRP (WS-TX-COUNT).
+           MOVE CI-OCN        TO WS-TX-OCN (WS-TX-COUNT).
+           MOVE CI-BAN        TO WS-TX-BAN (WS-TX-COUNT).
+           MOVE CI-STATE-CD   TO WS-TX-STATE (WS-TX-COUNT).
+           MOVE CI-CIRCUIT-ID TO WS-TX-CIRCUIT-ID (WS-TX-COUNT).
+           MOVE CI-STATUS     TO WS-TX-STATUS (WS-TX-COUNT).
+       P1210-EXIT.
+           EXIT.
+       S300-RECORD-PROCESSING SECTION.
+       P2000-PROCESS.
+           ADD 1 TO WS-READ-CNT.
+           MOVE 'N' TO WS-CL-FOUND-SW.
+           MOVE 'N' TO WS-CL-DISC-SW.
+           MOVE SPACES TO WS-ENRICH-STAGE-AREA.
+           PERFORM P2100-CLASSIFY-RECORD THRU P2100-EXIT.
+           IF NOT WS-CL-FOUND
+               ADD 1 TO WS-TABLE-MISS-CNT
+               PERFORM P4100-WRITE-SUSPENSE THRU P4100-EXIT
+               GO TO P2000-READ-NEXT.
+           PERFORM P4000-CHECK-CIRCUIT-STATUS THRU P4000-EXIT.
+           IF WS-CL-DISCONNECTED
+               PERFORM P4100-WRITE-SUSPENSE THRU P4100-EXIT
+               GO TO P2000-READ-NEXT.
+           PERFORM P5000-MPB-AUTO-SPLIT THRU P5000-EXIT.
+           PERFORM P6000-ENRICH-RECORD THRU P6000-EXIT.
+           PERFORM P6100-WRITE-ENROUT THRU P6100-EXIT.
+       P2000-READ-NEXT.
+           PERFORM P7000-READ-CLNIN THRU P7000-EXIT.
+       P2000-EXIT.
+           EXIT.
+      * P2100 DISPATCHES ON CD-USAGE-TYPE.  DATA/SPCL GO DIRECT TO
+      * CIRCMST; VOICE RESOLVES VIA THE IN-STORAGE TRUNK XREF.
+       P2100-CLASSIFY-RECORD.
+           IF CD-USAGE-TYPE = 'D'
+               ADD 1 TO WS-DATA-CNT
+               PERFORM P2200-RESOLVE-CIRCUIT-DIRECT THRU P2200-EXIT
+               GO TO P2100-EXIT.
+           IF CD-USAGE-TYPE = 'S'
+               ADD 1 TO WS-SPCL-CNT
+               PERFORM P2200-RESOLVE-CIRCUIT-DIRECT THRU P2200-EXIT
+               GO TO P2100-EXIT.
+           IF CD-USAGE-TYPE = 'V'
+               ADD 1 TO WS-VOICE-CNT
+               PERFORM P2300-RESOLVE-CIRCUIT-VOICE THRU P2300-EXIT
+               GO TO P2100-EXIT.
+           ADD 1 TO WS-UNKNOWN-TYPE-CNT.
+           MOVE 'N' TO WS-CL-FOUND-SW.
+       P2100-EXIT.
+           EXIT.
+       P2200-RESOLVE-CIRCUIT-DIRECT.
+           ADD 1 TO WS-DIRECT-LOOKUP-CNT.
+           IF CD-USAGE-TYPE = 'D'
+               MOVE CD-DT-CIRCUIT-ID TO WS-CL-CIRCUIT-ID
+           ELSE
+               MOVE CD-SP-CIRCUIT-ID TO WS-CL-CIRCUIT-ID.
+           MOVE WS-CL-CIRCUIT-ID TO CI-CIRCUIT-ID.
+           READ CIRCMST
+               INVALID KEY
+                   MOVE 'N' TO WS-CL-FOUND-SW.
+           IF WS-FS-TABLE NOT = '00'
+               GO TO P2200-EXIT.
+           MOVE 'Y' TO WS-CL-FOUND-SW.
+           PERFORM P3000-PARSE-CLLI THRU P3000-EXIT.
+       P2200-EXIT.
+           EXIT.
+      * P2300 SEARCHES THE TRUNK XREF TABLE AND REBUILDS A CIRCMST-
+      * SHAPED RECORD SO DOWNSTREAM LOGIC TREATS BOTH PATHS ALIKE.
+       P2300-RESOLVE-CIRCUIT-VOICE.
+           ADD 1 TO WS-VOICE-LOOKUP-CNT.
+           MOVE 'N' TO WS-TX-FOUND-SW.
+           MOVE 1 TO WS-TX-SUB.
+           PERFORM P2310-SCAN-TABLE THRU P2310-EXIT
+               UNTIL WS-TX-SUB > WS-TX-COUNT
+               OR WS-TX-FOUND.
+           IF NOT WS-TX-FOUND
+               MOVE 'N' TO WS-CL-FOUND-SW
+               GO TO P2300-EXIT.
+           MOVE 'Y' TO WS-CL-FOUND-SW.
+           MOVE WS-TX-CIRCUIT-ID (WS-TX-SUB) TO CI-CIRCUIT-ID.
+           MOVE WS-TX-OCN (WS-TX-SUB)        TO CI-OCN.
+           MOVE WS-TX-BAN (WS-TX-SUB)        TO CI-BAN.
+           MOVE WS-TX-STATE (WS-TX-SUB)      TO CI-STATE-CD.
+           MOVE WS-TX-STATUS (WS-TX-SUB)     TO CI-STATUS.
+           MOVE WS-TX-TRUNK-GRP (WS-TX-SUB)  TO CI-TRUNK-GRP.
+           PERFORM P3000-PARSE-CLLI THRU P3000-EXIT.
+       P2300-EXIT.
+           EXIT.
+       P2310-SCAN-TABLE.
+           IF WS-TX-TRUNK-GRP (WS-TX-SUB) = CD-VC-TRUNK-GRP
+               MOVE 'Y' TO WS-TX-FOUND-SW
+               GO TO P2310-EXIT.
+           ADD 1 TO WS-TX-SUB.
+       P2310-EXIT.
+           EXIT.
+      * P3000 - CABS-STD-023.  PARSES CI-CIRCUIT-ID INTO CLLI-STYLE
+      * SEGMENTS.  DELIMITER COUNT TALLIED FIRST, THEN THE ID IS
+      * WALKED CHAR BY CHAR VIA SUBSCRIPTED OCCURS.  BOUNDARIES ARE
+      * HARDCODED: 1-2 REGION, 3-6 CITY, 7-8 STATE, 9 BLDG, 10-15
+      * NETWORK, 16-18 EQUIP, 19-20 SPARE.  NO REFERENCE MOD USED.
+       P3000-PARSE-CLLI.
+           MOVE CI-CIRCUIT-ID TO WS-CLLI-RAW.
+           MOVE ZERO TO WS-CLLI-SLASH-CNT.
+           INSPECT WS-CLLI-RAW TALLYING WS-CLLI-SLASH-CNT
+               FOR ALL '/'.
+           MOVE SPACES TO WS-CLLI-REGION-CD.
+           MOVE SPACES TO WS-CLLI-CITY-CD.
+           MOVE SPACES TO WS-CLLI-STATE-CD.
+           MOVE SPACES TO WS-CLLI-BLDG-CD.
+           MOVE SPACES TO WS-CLLI-NETWORK-CD.
+           MOVE SPACES TO WS-CLLI-EQUIP-CD.
+           PERFORM P3100-WALK-CHAR THRU P3100-EXIT
+               VARYING WS-CLLI-SUB FROM 1 BY 1
+               UNTIL WS-CLLI-SUB > 20.
+       P3000-EXIT.
+           EXIT.
+       P3100-WALK-CHAR.
+           IF WS-CLLI-SUB < 3
+               MOVE WS-CLLI-CHAR (WS-CLLI-SUB) TO
+                   WS-CLLI-REGION-CHAR (WS-CLLI-SUB)
+               GO TO P3100-EXIT.
+           IF WS-CLLI-SUB < 7
+               MOVE WS-CLLI-CHAR (WS-CLLI-SUB) TO
+                   WS-CLLI-CITY-CHAR (WS-CLLI-SUB - 2)
+               GO TO P3100-EXIT.
+           IF WS-CLLI-SUB < 9
+               MOVE WS-CLLI-CHAR (WS-CLLI-SUB) TO
+                   WS-CLLI-STATE-CHAR (WS-CLLI-SUB - 6)
+               GO TO P3100-EXIT.
+           IF WS-CLLI-SUB = 9
+               MOVE WS-CLLI-CHAR (9) TO WS-CLLI-BLDG-CD
+               GO TO P3100-EXIT.
+           IF WS-CLLI-SUB < 16
+               MOVE WS-CLLI-CHAR (WS-CLLI-SUB) TO
+                   WS-CLLI-NETWORK-CHAR (WS-CLLI-SUB - 9)
+               GO TO P3100-EXIT.
+           IF WS-CLLI-SUB < 19
+               MOVE WS-CLLI-CHAR (WS-CLLI-SUB) TO
+                   WS-CLLI-EQUIP-CHAR (WS-CLLI-SUB - 15).
+       P3100-EXIT.
+           EXIT.
+      * P4000 TESTS CI-STATUS AND CI-DISC-YYDDD VS THE RUN DATE.
+       P4000-CHECK-CIRCUIT-STATUS.
+           MOVE 'N' TO WS-CL-DISC-SW.
+           IF CI-STATUS = 'D'
+               MOVE 'Y' TO WS-CL-DISC-SW
+               GO TO P4000-EXIT.
+           IF CI-DISC-YYDDD = ZERO
+               GO TO P4000-EXIT.
+           MOVE CI-DISC-YYDDD TO WS-CP-DATE-IN.
+           CALL 'CABDTCNV' USING WS-CP-DATE-IN WS-CP-DATE-OUT
+               WS-CP-RC.
+           IF CI-DISC-YYDDD NOT > DW-CURRENT-YYDDD
+               MOVE 'Y' TO WS-CL-DISC-SW.
+       P4000-EXIT.
+           EXIT.
+      * P4100 WRITES SUSPENSE AND CALLS CABERRWR PER ESTATE STANDARD.
+       P4100-WRITE-SUSPENSE.
+           ADD 1 TO WS-REJECT-CNT.
+           MOVE SPACES TO CABS-SUSPENSE-RECORD.
+           IF WS-CL-DISCONNECTED
+               MOVE EC-TERM-EXPIRED TO SU-ERR-CODE
+               MOVE 'W' TO SU-ERR-SEVERITY
+           ELSE
+               MOVE EC-CIRCUIT-UNKNOWN TO SU-ERR-CODE
+               MOVE 'E' TO SU-ERR-SEVERITY.
+           MOVE WS-PGM-NAME TO SU-DETECT-PGM.
+           MOVE 'P2000-PROCESS' TO SU-DETECT-PARA.
+           MOVE WS-SUS-RUN-ID TO SU-RUN-ID.
+           MOVE CABS-CDR-RECORD TO SU-ORIG-RECORD.
+           CALL 'CABERRWR' USING CABS-SUSPENSE-RECORD
+               WS-FS-SUSPENSE.
+           MOVE CABS-SUSPENSE-RECORD TO SUSOUT-RECORD.
+           WRITE SUSOUT-RECORD.
+       P4100-EXIT.
+           EXIT.
+      * P5000 - MPB AUTO SPLIT.  APPLIES OUR PERCENTAGE WHERE THE
+      * OTHER LEC BILLS THE FAR END OF THE CIRCUIT.
+       P5000-MPB-AUTO-SPLIT.
+           IF WS-MPB-AUTO-OFF
+               GO TO P5000-EXIT.
+           IF CI-MPB-SW NOT = 'Y'
+               GO TO P5000-EXIT.
+           PERFORM P5100-MPB-COMPUTE-OUR-SHARE THRU P5100-EXIT.
+           PERFORM P5200-MPB-COMPUTE-OTHER-SHARE THRU P5200-EXIT.
+           ADD 1 TO WS-MPB-APPLIED-CNT.
+           MOVE 'Y' TO WS-ENR-MPB-APPLIED.
+       P5000-EXIT.
+           EXIT.
+       P5100-MPB-COMPUTE-OUR-SHARE.
+           MOVE CI-MPB-OUR-PCT TO WS-MPB-OUR-PCT.
+           IF CD-USAGE-TYPE NOT = 'V'
+               GO TO P5100-EXIT.
+           COMPUTE WS-MPB-OUR-MOU ROUNDED =
+               CD-VC-CHG-MIN * WS-MPB-OUR-PCT / 100.
+       P5100-EXIT.
+           EXIT.
+       P5200-MPB-COMPUTE-OTHER-SHARE.
+           MOVE CI-MPB-OTHER-PCT TO WS-MPB-OTHER-PCT.
+           MOVE CI-MPB-OTHER-OCN TO WS-MPB-OTHER-OCN.
+           IF CD-USAGE-TYPE NOT = 'V'
+               GO TO P5200-EXIT.
+           COMPUTE WS-MPB-OTHER-MOU ROUNDED =
+               CD-VC-CHG-MIN * WS-MPB-OTHER-PCT / 100.
+       P5200-EXIT.
+           EXIT.
+       P6000-ENRICH-RECORD.
+           MOVE CI-OCN      TO WS-ENR-OCN.
+           MOVE CI-BAN      TO WS-ENR-BAN.
+           MOVE CI-STATE-CD TO WS-ENR-STATE.
+           MOVE CI-STATUS   TO WS-ENR-CIRC-STATUS.
+           CALL 'CABOCNVL' USING WS-ENR-OCN WS-CP-VALID-SW.
+           IF WS-CP-VALID-SW NOT = 'Y'
+               MOVE EC-OCN-UNKNOWN TO SU-ERR-CODE.
+       P6000-EXIT.
+           EXIT.
+       P6100-WRITE-ENROUT.
+           MOVE SPACES TO CABS-ENROUT-RECORD.
+           MOVE CD-OCN            TO EO-OCN.
+           MOVE CD-BAN            TO EO-BAN.
+           MOVE CD-SEQ-NBR        TO EO-SEQ-NBR.
+           MOVE CD-REC-TYPE       TO EO-REC-TYPE.
+           MOVE CD-USAGE-TYPE     TO EO-USAGE-TYPE.
+           MOVE CD-JURIS-CD       TO EO-JURIS-CD.
+           MOVE CD-RATE-ELEM      TO EO-RATE-ELEM.
+           MOVE CD-CONN-YYDDD     TO EO-CONN-YYDDD.
+           MOVE CD-CONN-HHMMSS    TO EO-CONN-HHMMSS.
+           MOVE CD-DISC-YYDDD     TO EO-DISC-YYDDD.
+           MOVE CD-DISC-HHMMSS    TO EO-DISC-HHMMSS.
+           MOVE CD-VARIANT-AREA   TO EO-VARIANT-AREA.
+           MOVE WS-ENR-OCN         TO EO-RESOLVED-OCN.
+           MOVE WS-ENR-BAN         TO EO-RESOLVED-BAN.
+           MOVE WS-ENR-STATE       TO EO-RESOLVED-STATE.
+           MOVE WS-ENR-CIRC-STATUS TO EO-CIRCUIT-STATUS.
+           MOVE WS-ENR-MPB-APPLIED TO EO-MPB-APPLIED-SW.
+           CALL 'CABHASH' USING EO-SEQ-NBR WS-ACC-SEQ-HASH.
+           WRITE CABS-ENROUT-RECORD.
+           ADD 1 TO WS-WRITE-CNT.
+       P6100-EXIT.
+           EXIT.
+       P7000-READ-CLNIN.
+           READ CLNIN
+               AT END
+                   MOVE 'Y' TO WS-EOF-SW.
+       P7000-EXIT.
+           EXIT.
+       S400-RUN-CONTROL SECTION.
+      * P8000 BUILDS CABS-CONTROL-RECORD AND TESTS THE BALANCING
+      * EQUATION.  THIS PROGRAM NEVER SUMMARISES OR CARRIES FORWARD.
+       P8000-CONTROL.
+           PERFORM P8100-BUILD-CONTROL-REC THRU P8100-EXIT.
+           PERFORM P8200-WRITE-CONTROL THRU P8200-EXIT.
+       P8000-EXIT.
+           EXIT.
+       P8100-BUILD-CONTROL-REC.
+           MOVE SPACES TO CABS-CONTROL-RECORD.
+           MOVE WS-SUS-RUN-ID TO CT-RUN-ID.
+           MOVE WS-PROCESS-ID TO CT-PROCESS-ID.
+           MOVE 1 TO CT-STEP-SEQ.
+           MOVE WS-READ-CNT   TO CT-READ.
+           MOVE WS-WRITE-CNT  TO CT-WRITTEN.
+           MOVE WS-REJECT-CNT TO CT-REJECTED.
+           MOVE ZERO TO CT-SUMMARISED.
+           MOVE ZERO TO CT-CARRIED-FWD.
+           MOVE WS-ACC-SEQ-HASH TO CT-HASH-SEQ.
+           MOVE ZERO TO CT-HASH-MINUTES.
+           MOVE ZERO TO CT-HASH-AMOUNT.
+           MOVE ZERO TO CT-HASH-OCN.
+           COMPUTE WS-CT-BAL-CHECK = CT-WRITTEN + CT-REJECTED +
+               CT-SUMMARISED + CT-CARRIED-FWD.
+           IF CT-READ = WS-CT-BAL-CHECK
+               SET CT-IN-BALANCE TO TRUE
+           ELSE
+               SET CT-OUT-OF-BAL TO TRUE.
+       P8100-EXIT.
+           EXIT.
+       P8200-WRITE-CONTROL.
+           MOVE CABS-CONTROL-RECORD TO CTLOUT-RECORD.
+           WRITE CTLOUT-RECORD.
+       P8200-EXIT.
+           EXIT.
+       S500-TERMINATION SECTION.
+       P9000-TERM.
+           PERFORM P9100-CLOSE-FILES THRU P9100-EXIT.
+       P9000-EXIT.
+           EXIT.
+       P9100-CLOSE-FILES.
+           CLOSE CLNIN.
+           CLOSE CIRCMST.
+           CLOSE ENROUT.
+           CLOSE SUSOUT.
+           CLOSE CTLOUT.
+       P9100-EXIT.
+           EXIT.

@@ -1,0 +1,497 @@
+{
+ "asset": "CABS Tier 5 wholesale access billing reference estate",
+ "scope_owner": "BILLCALC + FORMAT + REPORT families, their JCL, PROCs, control cards and IDCAMS DEFINE jobs",
+ "note": "Companion to CONTRACTS/complexity_placement.json, which owns the INGEST and RATING scope. Placements below are authoritative for this scope only.",
+ "compiler_target": "OS/VS COBOL 1974 (Hercules TK4- / MVS 3.8j)",
+ "size_actuals": {
+  "BATCH/BILLCALC": {
+   "programs": 12,
+   "lines": 13816,
+   "comment_lines": 2835
+  },
+  "BATCH/FORMAT": {
+   "programs": 9,
+   "lines": 8081,
+   "comment_lines": 1694
+  },
+  "BATCH/REPORT": {
+   "programs": 8,
+   "lines": 8617,
+   "comment_lines": 1609
+  }
+ },
+ "placements": [
+  {
+   "complexity": 1,
+   "name": "Fall-through (paragraph missing its EXIT)",
+   "required": 3,
+   "placed": 3,
+   "instances": [
+    {
+     "file": "BATCH/BILLCALC/CABBIL05.cbl",
+     "paragraph": "P3400-APPLY-CREDIT-ADJ",
+     "falls_into": "P3500-APPLY-DEBIT-ADJ",
+     "note": "no P3400-EXIT exists; credit callers use PERFORM P3400 THRU P3500-EXIT"
+    },
+    {
+     "file": "BATCH/FORMAT/CABFMT04.cbl",
+     "paragraph": "P3200-SECTION-BREAK-MINOR",
+     "falls_into": "P3300-SECTION-BREAK-MAJOR",
+     "note": "ends at P3200-CLEAR; minor break uses THRU P3200-CLEAR, major uses THRU P3300-EXIT"
+    },
+    {
+     "file": "BATCH/REPORT/CABRPT03.cbl",
+     "paragraph": "P4200-AGE-BUCKET-60",
+     "falls_into": "P4300-AGE-BUCKET-90",
+     "note": "ends at P4200-DONE; caller uses PERFORM P4200 THRU P4300-EXIT"
+    }
+   ]
+  },
+  {
+   "complexity": 3,
+   "name": "Hidden error handler far from invocation",
+   "required": 3,
+   "placed": 3,
+   "instances": [
+    {
+     "file": "BATCH/BILLCALC/CABBIL02.cbl",
+     "paragraph": "P9990-DETAIL-FAILURE",
+     "reached_from": [
+      "P3000-VALIDATE-RATED",
+      "P4400-VALIDATE-ELEMENT (via P7101-P7108)",
+      "P5600-EDIT-DESCRIPTION"
+     ]
+    },
+    {
+     "file": "BATCH/FORMAT/CABFMT01.cbl",
+     "paragraph": "P9980-PRINT-FAILURE",
+     "reached_from": [
+      "P2100-READ-DETAIL",
+      "P3400-WRITE-PRINT-LINE",
+      "P3600-INVOICE-HEAD",
+      "P4000-CLOSE-INVOICE"
+     ]
+    },
+    {
+     "file": "BATCH/REPORT/CABRPT01.cbl",
+     "paragraph": "P9970-CONTROL-FAILURE",
+     "reached_from": [
+      "P2000-PROCESS",
+      "P3100-READ-CONTROL",
+      "P3200-ELIGIBILITY",
+      "P4300-LOAD-PROCESS",
+      "P5400-MISSING-CHECK"
+     ]
+    }
+   ]
+  },
+  {
+   "complexity": 4,
+   "name": "Redefines",
+   "required": "2-6 per program",
+   "placed": 211,
+   "note": "every program carries the four-way SYSIN parm card redefine plus 2-4 program-specific views"
+  },
+  {
+   "complexity": 6,
+   "name": "Condition ranges (overlapping 88-levels)",
+   "required": 4,
+   "placed": 4,
+   "instances": [
+    {
+     "file": "BATCH/BILLCALC/CABBIL03.cbl",
+     "fields": "WS-SC-USAGE-SECTION 'U1' THRU 'U3' / WS-SC-CHARGE-SECTION 'U2' THRU 'C4'",
+     "overlap": "U2, U3",
+     "tested_in": "P4200-ELIGIBILITY"
+    },
+    {
+     "file": "BATCH/BILLCALC/CABBIL07.cbl",
+     "fields": "WS-TX-FEDERAL 'FE' THRU 'FS' / WS-TX-SURCHARGE 'FS' THRU 'SU'",
+     "overlap": "FS",
+     "tested_in": "P3400-SELECT-BASE"
+    },
+    {
+     "file": "BATCH/FORMAT/CABFMT05.cbl",
+     "fields": "WS-SP-SUMMARY 'S' THRU 'R' / WS-SP-RECAP 'R' THRU 'Z'",
+     "overlap": "R",
+     "tested_in": "P3000-BUILD-SUMMARY"
+    },
+    {
+     "file": "BATCH/REPORT/CABRPT06.cbl",
+     "fields": "WS-RS-DETAIL 1 THRU 4 / WS-RS-STUDY 4 THRU 7",
+     "overlap": "4",
+     "tested_in": "P3000-STUDY-LEVEL"
+    }
+   ]
+  },
+  {
+   "complexity": 7,
+   "name": "Variable-length records (CABSBILL ODO)",
+   "required": 5,
+   "placed": 6,
+   "instances": [
+    {
+     "file": "BATCH/BILLCALC/CABBIL02.cbl",
+     "role": "producer",
+     "paragraph": "P4600-WRITE-DETAIL / P4700-MOVE-ELEMENTS"
+    },
+    {
+     "file": "BATCH/BILLCALC/CABBIL03.cbl",
+     "role": "ODO walk then fixed 1204 sort image",
+     "paragraph": "P4000-WALK-ELEMENTS"
+    },
+    {
+     "file": "BATCH/BILLCALC/CABBIL09.cbl",
+     "role": "ODO walk",
+     "paragraph": "P3400-WALK-ELEMENTS"
+    },
+    {
+     "file": "BATCH/BILLCALC/CABBIL11.cbl",
+     "role": "ODO walk",
+     "paragraph": "P3200-WALK-ELEMENTS"
+    },
+    {
+     "file": "BATCH/FORMAT/CABFMT03.cbl",
+     "role": "ODO walk for print",
+     "paragraph": "P3500-EDIT-ELEMENTS"
+    },
+    {
+     "file": "BATCH/REPORT/CABRPT06.cbl",
+     "role": "SILENT TRUNCATION - MOVE of the VB group to WS-STUDY-AREA PIC X(400)",
+     "paragraph": "P4000-BUILD-EXTRACT"
+    }
+   ]
+  },
+  {
+   "complexity": 9,
+   "name": "Job parameters with no default",
+   "required": 10,
+   "placed": 24,
+   "jobs": [
+    "CABS4000 FORCSW/OCNFRM/OCNTHR/DUEDAY",
+    "CABS4100 MAXELM",
+    "CABS4200 AGEBAS",
+    "CABS4250 MAXADJ",
+    "CABS4300 SETPER/MINNET",
+    "CABS4350 MINBIL/MAXBIL",
+    "CABS4400 TAXDT/FEDRAT",
+    "CABS4500 VARPCT/HLDLIM",
+    "CABS4550 TOLER",
+    "CABS4600 PREFIX/SEQSTR",
+    "CABS5000 LINPGE/COMPNY",
+    "CABS5100 EDSTYL",
+    "CABS5200 SUMSTL",
+    "CABS5300 EDIVER/SENDID",
+    "CABS5400 VOLSER",
+    "CABS5500 FORMID/CAMPGN",
+    "CABS6000 EXPPRC",
+    "CABS6100 RLEVEL/SLEVEL",
+    "CABS6200 OLDDAY/QUARTR/VARLIM",
+    "CABS6300 AGELIM",
+    "CABS6400 CLSPER/LEDGCO/SIGNOF",
+    "CABS7000 RSTEP restart parameter on the job card"
+   ]
+  },
+  {
+   "complexity": 10,
+   "name": "Generation files selected by relative position",
+   "required": 8,
+   "placed": 9,
+   "instances": [
+    "CABS4250 ADJIN (0) concatenated with ADJUST.RESTATE (-1)",
+    "CABS4300 SETL.NET (-1)",
+    "CABS4500 PRIORIN BILLHDR.FIN (-1)",
+    "CABS6200 SUSPENSE (0)(-1)(-2)(-3)",
+    "CABS6300 SETTLE.ALL (-1)",
+    "CABS6400 CONTROL (0) through (-4)",
+    "CABS7000 CONTROL (0) through (-3) at STEP040 and (0) through (-4) at STEP060",
+    "CABPBHDR PRIGDG default '-1'",
+    "CABS7000 STEP070 ARCHIVE (+1)"
+   ]
+  },
+  {
+   "complexity": 11,
+   "name": "Shared job fragments (PROCs)",
+   "placed": 8,
+   "procs": [
+    "CABPBILL used by 4 jobs",
+    "CABPBDTL used by 2",
+    "CABPBADJ used by 2",
+    "CABPBHDR used by 3",
+    "CABPFMTP used by 3",
+    "CABPFMTM used by 3",
+    "CABPRPTB used by 5",
+    "CABPCLOS used by 2"
+   ]
+  },
+  {
+   "complexity": 12,
+   "name": "Library concatenation 3+ deep",
+   "placed": 8,
+   "note": "every PROC STEPLIB is 4 or 5 deep with TELCABS.CABS.EMERG.LOADLIB ahead of production"
+  },
+  {
+   "complexity": 13,
+   "name": "Job overrides",
+   "required": 6,
+   "placed": 16,
+   "instances": [
+    "CABS4000 4 DD overrides",
+    "CABS4150 5 including 3 DUMMY",
+    "CABS4200 3",
+    "CABS4250 SETLIN to DUMMY + concatenated ADJIN",
+    "CABS4300 ADJIN to DUMMY",
+    "CABS4350 3",
+    "CABS4400 3",
+    "CABS4450 3",
+    "CABS4500 5",
+    "CABS4550 4 DUMMY",
+    "CABS4600 3 DUMMY",
+    "CABS5000 5",
+    "CABS5100 6",
+    "CABS5200 2 DUMMY",
+    "CABS5400 MEDOUT redirected to tape",
+    "CABS5500 6 DUMMY",
+    "CABS6100/6200/6300 6 DUMMY each"
+   ]
+  },
+  {
+   "complexity": 14,
+   "name": "Sort utility logic - rule exists only in the control card",
+   "required": 10,
+   "placed": 10,
+   "cards": {
+    "CABSRT09": "INCLUDE drops status C accounts so CABBIL01 skip reason S2 has read zero since 1996",
+    "CABSRT10": "SUM FIELDS collapses duplicate element sequences; no program knows duplicates are possible",
+    "CABSRT11": "MODS E15=CABSXJUR re-derives a blank jurisdiction byte",
+    "CABSRT12": "MODS E15=CABSXZIP and E35=CABSXBST; the exit suppresses partially formatted invoices",
+    "CABSRT13": "INCLUDE is the EDI trading partner list, maintained by hand",
+    "CABSRT14": "OUTFIL OMIT drops zero-value details that the trailer hash still counts",
+    "CABSRT15": "keep-the-last-rerun depends on OPTION EQUALS plus MODS E35=CABSXLST",
+    "CABSRT16": "duplicate test excludes the run id, so the reported suspense age is the first suspension",
+    "CABSRT17": "INREC/OUTREC move the invoice prefix to the front so the ledger company can be sorted on",
+    "CABSRT18": "INCLUDE tests the result text, not the difference field"
+   }
+  },
+  {
+   "complexity": 15,
+   "name": "File definition jobs - datasets declared nowhere else",
+   "required": 6,
+   "placed": 6,
+   "instances": [
+    {
+     "job": "VSAM/CABVDEF1.jcl",
+     "dataset": "TELCABS.CABS.TAXRATE",
+     "read_by": "CABBIL07"
+    },
+    {
+     "job": "VSAM/CABVDEF2.jcl",
+     "dataset": "TELCABS.CABS.INVCTL",
+     "read_by": "CABBIL12"
+    },
+    {
+     "job": "VSAM/CABVDEF3.jcl",
+     "dataset": "TELCABS.CABS.HOLDRSN",
+     "read_by": "CABBIL10"
+    },
+    {
+     "job": "VSAM/CABVDEF4.jcl",
+     "dataset": "TELCABS.CABS.BILLMSG and TELCABS.CABS.CONTRACT.MMX",
+     "read_by": "CABFMT09 and CABBIL08"
+    },
+    {
+     "job": "VSAM/CABVDEF5.jcl",
+     "dataset": "TELCABS.CABS.FACTOR.CARDS plus the PRTCTL.DOC alternate index and path",
+     "read_by": "CABRPT04; the AIX path has not been opened since 2006"
+    },
+    {
+     "job": "VSAM/CABVDEF6.jcl",
+     "dataset": "TELCABS.CABS.CLOSEMST",
+     "read_by": "CABRPT08 writes it; the general ledger interface reads it and is outside the estate"
+    }
+   ]
+  },
+  {
+   "complexity": 16,
+   "name": "Cross application access",
+   "placed": 4,
+   "instances": [
+    "CABBIL06 reads TELCABS.SETL.NET",
+    "CABRPT05 reads TELCABS.SETL.SETTLE.ALL",
+    "CABPBADJ SETLIN DD",
+    "CABPRPTB SETL.LOADLIB in STEPLIB"
+   ]
+  },
+  {
+   "complexity": 20,
+   "name": "String assembly",
+   "required": 6,
+   "placed": 6,
+   "instances": [
+    {
+     "file": "BATCH/BILLCALC/CABBIL02.cbl",
+     "paragraph": "P5400-BUILD-DESCRIPTION and P5410-P5460"
+    },
+    {
+     "file": "BATCH/BILLCALC/CABBIL05.cbl",
+     "paragraph": "P4600-BUILD-ADJ-TEXT"
+    },
+    {
+     "file": "BATCH/BILLCALC/CABBIL12.cbl",
+     "paragraph": "P3200-BUILD-INVOICE-NBR"
+    },
+    {
+     "file": "BATCH/FORMAT/CABFMT02.cbl",
+     "paragraph": "P3200-BUILD-TITLE, P4000, P4100"
+    },
+    {
+     "file": "BATCH/FORMAT/CABFMT06.cbl",
+     "paragraph": "P3000, P3100, P3200, P3900, P3950, P4000 - every EDI segment"
+    },
+    {
+     "file": "BATCH/REPORT/CABRPT08.cbl",
+     "paragraph": "P4200-BUILD-CLOSE-KEY"
+    }
+   ]
+  },
+  {
+   "complexity": 21,
+   "name": "Rounding rules - deliberate inconsistency",
+   "required": 6,
+   "placed": 8,
+   "pairs": [
+    {
+     "rounded": "CABBIL02 P4500-ROUND-GROUP computes BD-TOT-ROUNDED with ROUNDED",
+     "truncated": "CABBIL11 P3100-ACCUM-LINE sums that 2dp figure against the 5dp header hash"
+    },
+    {
+     "rounded": "CABBIL06 P3400-ROUND-NET rounds the settlement net",
+     "truncated": "CABBIL09 P4200-POST-TOTALS MOVEs 5dp accumulators into 2dp header fields"
+    },
+    {
+     "rounded": "CABBIL07 P3600-COMPUTE-TAX rounds each of five components separately",
+     "truncated": "CABFMT05 P3260-SELECT-AMOUNT MOVEs the tax into a whole-dollar field for the summary page"
+    },
+    {
+     "rounded": "CABRPT02 P3300-ACCUM-BUCKET recomputes the rounded figure from the 5dp accumulator at every level",
+     "truncated": "CABRPT05 P3200-ACCUM-POSITION MOVEs the 5dp position into a 2dp shown field"
+    },
+    {
+     "truncated_only": "CABBIL08 P3200-APPLY-MINIMUM and P3300-APPLY-MAXIMUM take the make-up and excess by MOVE, never ROUNDED"
+    }
+   ]
+  },
+  {
+   "complexity": 22,
+   "name": "Print control carrying business meaning",
+   "required": 8,
+   "placed": 9,
+   "instances": [
+    "CABFMT01 '7' invoice / '4' section and the section counter on PRTCTL",
+    "CABFMT02 '1' page and the demotion rule",
+    "CABFMT03 '+' overprint for the compressed element form",
+    "CABFMT04 '0' and '-' on the total lines, breaks detected from the cc",
+    "CABFMT05 '7' because the summary page is its own document",
+    "CABFMT08 counts every cc character for the mailroom",
+    "CABFMT09 '7' so the message page can be diverted to another tray",
+    "CABRPT01 '4' burst the report by family",
+    "P6000-HEADING in all 29 programs uses '1' and '0'"
+   ]
+  },
+  {
+   "complexity": 23,
+   "name": "Character scanning - INSPECT and subscripted OCCURS walks, no reference modification",
+   "required": 5,
+   "placed": 5,
+   "instances": [
+    {
+     "file": "BATCH/BILLCALC/CABBIL02.cbl",
+     "paragraph": "P3210-BUILD-PREFIX, P5500-TRIM-DESCRIPTION, P5510-SCAN-BACK, P5600-EDIT-DESCRIPTION"
+    },
+    {
+     "file": "BATCH/BILLCALC/CABBIL12.cbl",
+     "paragraph": "P3400-CHECK-CHARACTER, P3410, P3425, P3435"
+    },
+    {
+     "file": "BATCH/FORMAT/CABFMT03.cbl",
+     "paragraph": "P3600-SCAN-EDITED, P3610-SCAN-ONE"
+    },
+    {
+     "file": "BATCH/FORMAT/CABFMT06.cbl",
+     "paragraph": "P4400-SCAN-DELIMITERS, P4200-SPLIT-DESCRIPTION"
+    },
+    {
+     "file": "BATCH/REPORT/CABRPT04.cbl",
+     "paragraph": "P4200-SCAN-CARD, P4210-ONE-COLUMN"
+    }
+   ]
+  },
+  {
+   "complexity": 24,
+   "name": "Sort inside a program",
+   "required": 2,
+   "placed": 2,
+   "instances": [
+    {
+     "file": "BATCH/BILLCALC/CABBIL03.cbl",
+     "sections": "S310-SORT-INPUT holds the zero-value suppression rule, S320-SORT-OUTPUT holds the renumbering"
+    },
+    {
+     "file": "BATCH/REPORT/CABRPT01.cbl",
+     "sections": "S310-SORT-INPUT holds the cycle eligibility rule, S320-SORT-OUTPUT holds the equation proof and the process table load"
+    }
+   ]
+  },
+  {
+   "complexity": 26,
+   "name": "Dead code",
+   "required": 3,
+   "placed": 3,
+   "instances": [
+    {
+     "file": "BATCH/BILLCALC/CABBIL04.cbl",
+     "paragraphs": [
+      "P6200-DEFERRED-PAYMENT-PLAN",
+      "P6210-PLAN-SCHEDULE"
+     ],
+     "note": "written for the 1995 settlement programme, never PERFORMed"
+    },
+    {
+     "file": "BATCH/FORMAT/CABFMT07.cbl",
+     "paragraphs": [
+      "P5400-MICROFICHE-BLOCK"
+     ],
+     "note": "fiche bureau contract ended 2001, never PERFORMed"
+    },
+    {
+     "file": "BATCH/REPORT/CABRPT05.cbl",
+     "paragraphs": [
+      "P6100-INTEREST-PROJECTION",
+      "P6110-ONE-INTEREST"
+     ],
+     "note": "1999 tariff review interest projection, never PERFORMed"
+    }
+   ]
+  },
+  {
+   "complexity": 27,
+   "name": "Dormant feature",
+   "required": 2,
+   "placed": 2,
+   "instances": [
+    {
+     "file": "BATCH/FORMAT/CABFMT09.cbl",
+     "gate": "P1400-FEATURE-CHECK requires WS-PE-INSERT-SW = Y and a non blank campaign",
+     "note": "CABS5500 STEP020 substitutes N and a blank campaign; the job runs every cycle and produces an empty print file. Last live campaign 2009"
+    },
+    {
+     "file": "BATCH/BILLCALC/CABBIL06.cbl",
+     "gate": "P4800-CMDS-RESIDUAL-NET behind WS-PE-CMDS-RESID-SW",
+     "note": "the 1994 CMDS residual pool share; CABS4300 substitutes N"
+    }
+   ]
+  }
+ ],
+ "seeded_defects_count": 3,
+ "seeded_defects": "WITHHELD - see SEALED/defect_placements.json"
+}

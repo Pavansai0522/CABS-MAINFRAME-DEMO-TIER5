@@ -1,0 +1,44 @@
+//CABVDEF1 JOB (CABS,VSAM),'DEFINE TAX RATE MASTER',
+//             CLASS=B,MSGCLASS=X,MSGLEVEL=(1,1),NOTIFY=&SYSUID
+//*****************************************************************
+//* CABVDEF1 - DEFINE TELCABS.CABS.TAXRATE                        *
+//*                                                               *
+//* THE TAX RATE MASTER.  CABBIL07 OPENS IT AND READS IT AT EVERY *
+//* RUN.  NO PROGRAM IN THE ESTATE WRITES IT - IT IS MAINTAINED   *
+//* BY THE TAX DEPARTMENT THROUGH A FILE-AID PANEL AND THIS JOB   *
+//* IS THE ONLY PLACE THE DATASET IS DECLARED.                    *
+//* ALLOCATION IS HELD IN THIS MEMBER ONLY - SEE CABS-STD-058.   *
+//*                                                               *
+//* RUN ONCE IN 1991 AND AGAIN AFTER THE 2003 DASD MIGRATION.     *
+//* THE MEMBER IS KEPT SO THAT A DISASTER RECOVERY REBUILD HAS    *
+//* SOMETHING TO WORK FROM.                                       *
+//*****************************************************************
+//STEP010  EXEC PGM=IDCAMS
+//SYSPRINT DD SYSOUT=*
+//SYSIN    DD *
+  DEFINE CLUSTER ( -
+         NAME(TELCABS.CABS.TAXRATE) -
+         INDEXED -
+         KEYS(5 0) -
+         RECORDSIZE(100 100) -
+         SHAREOPTIONS(2 3) -
+         VOLUMES(CABS01) -
+         CYLINDERS(2 1) -
+         FREESPACE(20 10) ) -
+     DATA ( -
+         NAME(TELCABS.CABS.TAXRATE.DATA) -
+         CISZ(4096) ) -
+     INDEX ( -
+         NAME(TELCABS.CABS.TAXRATE.INDEX) -
+         CISZ(2048) )
+  IF LASTCC = 0 THEN -
+     REPRO INFILE(SEEDIN) -
+           OUTDATASET(TELCABS.CABS.TAXRATE)
+/*
+//SEEDIN   DD *
+**  FE0300000    0000000000000000000000FEDERAL EXCISE TAX
+**  ST0000000    0000000000000000000000STATE SALES TAX
+**  LO0000000    0000000000000000000000LOCAL SURCHARGE
+**  E90000000    0000000000000000000000E911 SURCHARGE
+/*
+//

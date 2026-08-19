@@ -1,0 +1,108 @@
+*****************************************************************
+* CABM0600 - SETTLEMENT INQUIRY MAPSET FOR CAB5 (CABONL06).     *
+* BROWSES TELCABS.CABS.SETTLE (VSAM KSDS, CABSSETL RECORD) FOR  *
+* MEET-POINT, RECIPROCAL COMPENSATION AND CMDS/RAO SETTLEMENT   *
+* KINDS.  CABONL06 IS ALSO LINKED AS A SUBROUTINE BY CABONL05 - *
+* WHEN LINKED, THIS MAP IS NOT SENT.  2004 VINTAGE.              *
+*                                                                 *
+* REVISION HISTORY                                                *
+*   V1.00  2004-05-14  S.OKONKWO    INITIAL - BUILT ALONGSIDE    *
+*                                   CABM0500 UNDER THE DISPUTE    *
+*                                   TRACKING INITIATIVE           *
+*****************************************************************
+         PRINT NOGEN
+CABM06   DFHMSD TYPE=&SYSPARM,MODE=INOUT,LANG=COBOL,STORAGE=AUTO,     X
+               TIOAPFX=YES,CTRL=(FREEKB,FRSET),EXTATT=YES
+*
+SETLMAP  DFHMDI SIZE=(24,80),LINE=1,COLUMN=1
+*
+         DFHMDF POS=(1,1),LENGTH=4,ATTRB=(ASKIP,NORM),               X
+               COLOR=BLUE,INITIAL='CAB5'
+         DFHMDF POS=(1,10),LENGTH=24,ATTRB=(ASKIP,NORM),             X
+               COLOR=BLUE,INITIAL='SETTLEMENT INQUIRY'
+CDAT     DFHMDF POS=(1,70),LENGTH=8,ATTRB=(ASKIP,NORM),COLOR=BLUE
+*
+         DFHMDF POS=(3,1),LENGTH=18,ATTRB=(ASKIP,NORM),              X
+               COLOR=TURQUOISE,INITIAL='COUNTERPARTY OCN='
+COCN     DFHMDF POS=(3,20),LENGTH=4,ATTRB=(UNPROT,IC,FSET),          X
+               COLOR=YELLOW
+         DFHMDF POS=(3,27),LENGTH=6,ATTRB=(ASKIP,NORM),              X
+               COLOR=TURQUOISE,INITIAL='TYPE=>'
+STYP     DFHMDF POS=(3,34),LENGTH=1,ATTRB=(UNPROT,FSET),             X
+               COLOR=YELLOW
+         DFHMDF POS=(3,38),LENGTH=8,ATTRB=(ASKIP,NORM),              X
+               COLOR=TURQUOISE,INITIAL='PERIOD=>'
+PERD     DFHMDF POS=(3,47),LENGTH=6,ATTRB=(UNPROT,FSET,NUM),         X
+               COLOR=YELLOW,PICIN='999999',PICOUT='999999'
+*
+         DFHMDF POS=(5,1),LENGTH=10,ATTRB=(ASKIP,NORM),              X
+               COLOR=TURQUOISE,INITIAL='TOTAL MOU.'
+TMOU     DFHMDF POS=(5,12),LENGTH=17,ATTRB=(ASKIP,NORM),             X
+               COLOR=NEUTRAL
+         DFHMDF POS=(6,1),LENGTH=10,ATTRB=(ASKIP,NORM),              X
+               COLOR=TURQUOISE,INITIAL='BILL MOU..'
+BMOU     DFHMDF POS=(6,12),LENGTH=17,ATTRB=(ASKIP,NORM),             X
+               COLOR=NEUTRAL
+*
+         DFHMDF POS=(8,1),LENGTH=10,ATTRB=(ASKIP,NORM),              X
+               COLOR=TURQUOISE,INITIAL='GROSS AMT.'
+GAMT     DFHMDF POS=(8,12),LENGTH=17,ATTRB=(ASKIP,NORM),             X
+               COLOR=NEUTRAL,PICOUT='----,---,---.999'
+         DFHMDF POS=(9,1),LENGTH=10,ATTRB=(ASKIP,NORM),              X
+               COLOR=TURQUOISE,INITIAL='OUR SHARE.'
+OSHR     DFHMDF POS=(9,12),LENGTH=17,ATTRB=(ASKIP,NORM),             X
+               COLOR=NEUTRAL,PICOUT='----,---,---.999'
+         DFHMDF POS=(10,1),LENGTH=10,ATTRB=(ASKIP,NORM),             X
+               COLOR=TURQUOISE,INITIAL='THEIR SHR.'
+TSHR     DFHMDF POS=(10,12),LENGTH=17,ATTRB=(ASKIP,NORM),            X
+               COLOR=NEUTRAL,PICOUT='----,---,---.999'
+         DFHMDF POS=(11,1),LENGTH=10,ATTRB=(ASKIP,NORM),             X
+               COLOR=TURQUOISE,INITIAL='NET DUE...'
+NDUE     DFHMDF POS=(11,12),LENGTH=15,ATTRB=(ASKIP,BRT),             X
+               COLOR=GREEN,PICOUT='---,---,---.99'
+*
+         DFHMDF POS=(13,1),LENGTH=10,ATTRB=(ASKIP,NORM),             X
+               COLOR=TURQUOISE,INITIAL='DIRECTION.'
+DIR      DFHMDF POS=(13,12),LENGTH=1,ATTRB=(ASKIP,NORM),             X
+               COLOR=NEUTRAL
+         DFHMDF POS=(13,20),LENGTH=10,ATTRB=(ASKIP,NORM),            X
+               COLOR=TURQUOISE,INITIAL='DISPUTED..'
+DSW      DFHMDF POS=(13,31),LENGTH=1,ATTRB=(ASKIP,NORM),             X
+               COLOR=RED,HILIGHT=REVERSE
+*
+         DFHMDF POS=(23,1),LENGTH=1,ATTRB=(ASKIP,NORM),              X
+               COLOR=RED,INITIAL='*'
+MSGL     DFHMDF POS=(23,3),LENGTH=76,ATTRB=(ASKIP,BRT),COLOR=RED
+*
+         DFHMDF POS=(24,1),LENGTH=79,ATTRB=(ASKIP,NORM),             X
+               COLOR=BLUE,INITIAL='PF3=EXIT  PF7=BACKWARD  PF8=FORWX
+               ARD  PF12=MENU'
+*
+         DFHMSD TYPE=FINAL
+         END
+*
+*****************************************************************
+* FIELD INVENTORY - MAINTAINED BY HAND, NOT ASSEMBLER OUTPUT.   *
+* CABS-STD-021 SECTION 3.                                       *
+*                                                                 *
+* FIELD    ROW  COL  LEN  I/O  NOTES                            *
+* COCN      03   20    4   I   SEARCH KEY - COUNTERPARTY OCN,   *
+*                               ALSO BROWSE ANCHOR               *
+* STYP      03   34    1   I   SETTLE TYPE (M/R/C)              *
+* PERD      03   47    6   I   SETTLE PERIOD                    *
+* TMOU      05   12   17   O   TOTAL MOU                        *
+* BMOU      06   12   17   O   BILLABLE MOU                     *
+* GAMT      08   12   17   O   GROSS AMOUNT                     *
+* OSHR      09   12   17   O   OUR SHARE                        *
+* TSHR      10   12   17   O   THEIR SHARE                      *
+* NDUE      11   12   15   O   NET DUE                          *
+* DIR       13   12    1   O   DIRECTION (R/P)                  *
+* DSW       13   31    1   O   DISPUTE SWITCH, REVERSE VIDEO     *
+*                               WHEN A DISPUTE IS ON FILE         *
+* CDAT      01   70    8   O   SYSTEM DATE                      *
+* MSGL      23   03   76   O   ONE LINE MESSAGE AREA            *
+*                                                                 *
+* THIS MAP IS NEVER SENT WHEN CABONL06 IS RUNNING LINKED AS A    *
+* SUBROUTINE FROM CABONL05 - SEE CABONL06 P0000-MAINLINE AND     *
+* P6000-SUBROUTINE-LOOKUP.                                        *
+*****************************************************************

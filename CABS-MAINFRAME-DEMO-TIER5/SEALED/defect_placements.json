@@ -1,0 +1,120 @@
+{
+  "asset": "CABS Tier 5 wholesale access billing reference estate",
+  "file_role": "Sealed placement register for the seeded defects. Moved out of CONTRACTS/complexity_placement.json so that the unsealed traceability file carries a count and a pointer only. WITHHOLD FOR A BLIND RUN.",
+  "generated": "2026-08-15",
+  "note": "Where each seeded defect sits and which of the 27 constructs it rides on. The description, business impact and correct modernization response are in SEALED/answer_key_*.json and must not be copied here.",
+  "seeded_defects": [
+    {
+      "id": "D1",
+      "file": "BATCH/INGEST/CABING05.cbl",
+      "paragraph": "P4300-SPLIT-FATAL",
+      "construct": 1
+    },
+    {
+      "id": "D2",
+      "file": "BATCH/RATING/CABRAT03.cbl",
+      "paragraph": "P5400-RATE-TANDEM",
+      "construct": null
+    },
+    {
+      "id": "D3",
+      "file": "BATCH/JURIS/CABJUR07.cbl",
+      "paragraph": "P1400-BUILD-WINDOW / P2300-WINDOW-TEST",
+      "construct": 19
+    },
+    {
+      "id": "D4",
+      "file": "BATCH/SETTLE/CABSET01.cbl",
+      "paragraph": "P3200-PCT-RESIDUAL",
+      "construct": null
+    },
+    {
+      "id": "D5",
+      "file": "BATCH/SETTLE/CABSET05.cbl",
+      "paragraph": "P3000-APPLY-RATE / P3200-ISP-CAP",
+      "construct": null
+    },
+    {
+      "id": "D6",
+      "file": "BATCH/BILLCALC/CABBIL11.cbl",
+      "paragraph": "P5200-COMPARE-TOTALS",
+      "construct": 21
+    },
+    {
+      "id": "D7",
+      "file": "BATCH/JURIS/CABJUR07.cbl",
+      "paragraph": "P3200-FIND-PRIOR",
+      "construct": null
+    },
+    {
+      "id": "D8",
+      "file": "BATCH/RATING/CABRAT06.cbl",
+      "paragraph": "P3200-SELECT-BAND",
+      "construct": 6
+    },
+    {
+      "id": "D9",
+      "file": "BATCH/FORMAT/CABFMT01.cbl",
+      "paragraph": "P3100-START-INVOICE / P3300-ASSIGN-CARRIAGE-CONTROL",
+      "construct": 22
+    },
+    {
+      "id": "D10",
+      "file": "BATCH/BILLCALC/CABBIL10.cbl",
+      "paragraph": "P2300-RECOMPUTE-TOTAL / P3100-HOLD-TEST-NEGATIVE / P3600-APPLY-ADJ-TO-TOTAL",
+      "construct": null
+    },
+    {
+      "id": "D11",
+      "file": "SORTEXIT/CABSE35B.cbl",
+      "paragraph": "P2000-WORK-BOUNDARY / P2400-RESTART-RESIDUE",
+      "construct": 14
+    },
+    {
+      "id": "D12",
+      "file": "BATCH/BILLCALC/CABBIL03.cbl",
+      "paragraph": "P4300-BUILD-SORT-REC / P5200-RETURN-ONE / P5400-WRITE-SEQUENCED",
+      "construct": 24
+    }
+  ],
+  "reference_layer_seeded_defects": [
+    {
+      "id": "D11",
+      "file": "SORTEXIT/CABSE35B.cbl",
+      "paragraph": "P2000-WORK-BOUNDARY / P2400-RESTART-RESIDUE",
+      "answer_key": "SEALED/answer_key_reference_layer.json"
+    }
+  ],
+  "bill_format_report_scope_seeded_defects": [
+    {
+      "id": "D6",
+      "file": "BATCH/BILLCALC/CABBIL11.cbl",
+      "paragraph": "P5200-COMPARE-TOTALS"
+    },
+    {
+      "id": "D9",
+      "file": "BATCH/FORMAT/CABFMT01.cbl",
+      "paragraph": "P3300-ASSIGN-CARRIAGE-CONTROL"
+    },
+    {
+      "id": "D10",
+      "file": "BATCH/BILLCALC/CABBIL10.cbl",
+      "paragraph": "P2300-RECOMPUTE-TOTAL / P3600-APPLY-ADJ-TO-TOTAL"
+    },
+    {
+      "id": "D12",
+      "file": "BATCH/BILLCALC/CABBIL03.cbl",
+      "paragraph": "P4300-BUILD-SORT-REC / P5200-RETURN-ONE"
+    }
+  ],
+  "divergence_mode_attribution": {
+    "_note": "Which seeded defect each GENERATORS/gen_divergence.py mode is expected to attribute to. Moved here out of the generator so that the unsealed toolchain does not carry the mapping. gen_divergence.py loads it from here when SEALED/ is present and reports null for every mode when it is not.",
+    "band-boundary": "D8",
+    "tandem-rounding": "D2",
+    "fatal-excluded": "D1",
+    "cycle-window": "D3",
+    "unseeded-drift": null,
+    "record-loss": null,
+    "element-overflow": "D12"
+  }
+}

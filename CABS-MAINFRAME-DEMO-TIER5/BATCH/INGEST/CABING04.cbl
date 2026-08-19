@@ -1,0 +1,418 @@
+       IDENTIFICATION DIVISION.
+      *****************************************************************
+      * CABING04 - YYDDD DATE VALIDATION (CONNECT / DISCONNECT)       *
+      * APPLICATION : CABS                                            *
+      * INPUTS      : DUPIN   TELCABS.CABS.USAGE.DEDUP(0)   CABSCDR   *
+      * OUTPUTS     : DTVOUT  TELCABS.CABS.USAGE.DATEVAL(+1) CABSCDR  *
+      *               SUSOUT  TELCABS.CABS.USAGE.SUSPENSE(+1) CABSERR *
+      * CONTROL     : CTLOUT                               CABSCTL    *
+      * BALANCE     : CT-READ = CT-WRITTEN + CT-REJECTED +            *
+      *               CT-SUMMARISED + CT-CARRIED-FWD                  *
+      * RESTART     : FULL RERUN                                      *
+      * REVISION HISTORY                                              *
+      *   V1.00  1990-01-08  R.T.WHEELER  INITIAL - RANGE CHECK ONLY  *
+      *   V1.10  1994-06-14  D.OKONKWO    LEAP YEAR TEST ADDED        *
+      *   V1.20  1999-09-30  J.M.CASTILLO Y2K PIVOT LOGIC INSTALLED - *
+      *                                   PIVOT YEAR IS 70 ESTATE-WIDE*
+      *   V1.30  2003-03-11  P.NAIR       95-DAY BACK-DATE WINDOW     *
+      *                                   ADDED PER TARIFF FILING     *
+      *   V1.31  2006-11-20  A.BUKOWSKI   RECOMPILE - NO LOGIC CHANGE *
+      *   V1.40  2010-04-02  S.MARCHETTI  CALLS CABDTCNV NOW INSTEAD  *
+      *                                   OF LOCAL GREGORIAN MATH     *
+      *   V1.41  2014-07-17  K.ADEYEMI    FUTURE-DATE CHECK NOW USES  *
+      *                                   THE CYCLE DATE, NOT TODAY   *
+      *   V1.50  2019-09-05  T.VANCE      RECOMPILE ONLY - LE V7 MIGR *
+      *****************************************************************
+       PROGRAM-ID.    CABING04.
+       AUTHOR.        RADIANT-DIGITAL-CABS-TEAM.
+       DATE-WRITTEN.  1990-01-08.
+       DATE-COMPILED.
+       ENVIRONMENT DIVISION.
+       CONFIGURATION SECTION.
+       SOURCE-COMPUTER.   IBM-370.
+       OBJECT-COMPUTER.   IBM-370.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT DUPIN   ASSIGN TO DUPIN
+               ORGANIZATION IS SEQUENTIAL
+               FILE STATUS  IS WS-FS-INPUT.
+           SELECT DTVOUT  ASSIGN TO DTVOUT
+               ORGANIZATION IS SEQUENTIAL
+               FILE STATUS  IS WS-FS-OUTPUT.
+           SELECT SUSOUT  ASSIGN TO SUSOUT
+               ORGANIZATION IS SEQUENTIAL
+               FILE STATUS  IS WS-FS-SUSPENSE.
+           SELECT CTLOUT  ASSIGN TO CTLOUT
+               ORGANIZATION IS SEQUENTIAL
+               FILE STATUS  IS WS-FS-CONTROL.
+
+       DATA DIVISION.
+       FILE SECTION.
+       FD  DUPIN
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 200 CHARACTERS.
+           COPY CABSCDR.
+
+       FD  DTVOUT
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 200 CHARACTERS.
+       01  DTV-OUT-RECORD                PIC X(200).
+
+       FD  SUSOUT
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 300 CHARACTERS.
+       01  SUS-OUT-RECORD                 PIC X(300).
+
+       FD  CTLOUT
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 180 CHARACTERS.
+       01  CTL-OUT-RECORD                 PIC X(180).
+
+       WORKING-STORAGE SECTION.
+       COPY CABSWRK.
+
+      * OWN WORKING STORAGE - CABSWRK SUPPLIES THE STANDARD SWITCHES,
+      * COUNTERS, ACCUMULATORS, FILE STATUS, ERROR CODES, SUSPENSE
+      * LAYOUT, DATE WORK AREA (INCLUDING DW-PIVOT-YY) AND CONTROL
+      * RECORD.
+       01  WS-PGM-CONSTANTS.
+           05  WS-PGM-NAME               PIC X(08) VALUE 'CABING04'.
+
+       01  WS-PARM-CARD-AREA.
+           05  WS-PARM-RUN-ID            PIC X(12).
+           05  WS-PARM-CYCLE-YYDDD       PIC 9(05).
+           05  WS-PARM-RERUN-NBR         PIC 9(02).
+           05  FILLER                    PIC X(61).
+       01  WS-PARM-CARD-ALT REDEFINES WS-PARM-CARD-AREA.
+           05  WS-PARM-RAW-TEXT          PIC X(80).
+
+      * PER-STAGE FAILURE COUNTS - INFORMATIONAL BREAKDOWN OF
+      * WS-REJECT-CNT SO OPERATIONS CAN SEE WHICH RULE IS DRIVING
+      * SUSPENSE VOLUME WITHOUT OPENING SUSOUT.
+       01  WS-DATE-FAIL-STATS.
+           05  WS-CONN-FAIL-CNT          PIC S9(07) COMP-3 VALUE 0.
+           05  WS-DISC-FAIL-CNT          PIC S9(07) COMP-3 VALUE 0.
+           05  WS-CROSS-FAIL-CNT         PIC S9(07) COMP-3 VALUE 0.
+           05  WS-CONV-FAIL-CNT          PIC S9(07) COMP-3 VALUE 0.
+
+       01  WS-CYCLE-DATE.
+           05  WS-CYCLE-YY               PIC 9(02).
+           05  WS-CYCLE-DDD              PIC 9(03).
+
+       01  WS-DATE-VALID-SW              PIC X(01).
+           88  WS-DATE-VALID             VALUE 'Y'.
+
+      * CONNECT-SIDE WORK AREA.
+       01  WS-CONN-WORK.
+           05  WS-CONN-YY                PIC 9(02).
+           05  WS-CONN-DDD                PIC 9(03).
+           05  WS-CONN-CCYY               PIC 9(04).
+
+      * DISCONNECT-SIDE WORK AREA - CD-DISC-YYDDD IS A SINGLE
+      * PIC 9(05) FIELD IN CABSCDR, NOT A GROUP, SO IT IS SPLIT
+      * HERE VIA DIVIDE/REMAINDER RATHER THAN REFERENCE MOD.
+       01  WS-DISC-WORK.
+           05  WS-DISC-YY                 PIC 9(02).
+           05  WS-DISC-DDD                 PIC 9(03).
+           05  WS-DISC-CCYY                PIC 9(04).
+       01  WS-DISC-SPLIT REDEFINES WS-DISC-WORK.
+           05  WS-DISC-SPLIT-FILLER        PIC X(09).
+
+       01  WS-DISC-REMAINDER              PIC 9(05).
+
+       01  WS-LEAP-WORK.
+           05  WS-LEAP-CCYY                PIC 9(04).
+           05  WS-LEAP-REM-4                PIC 9(02).
+           05  WS-LEAP-REM-100               PIC 9(02).
+           05  WS-LEAP-REM-400               PIC 9(03).
+           05  WS-LEAP-MAX-DDD                PIC 9(03).
+
+      * DAY-COUNT DIFFERENCE WORK - CABDTCNV RETURNS THE ELAPSED
+      * DAYS BETWEEN TWO YYDDD DATES IN DW-DAYS-DIFF.
+       01  WS-CONV-CALL-AREA.
+           05  WS-CONV-FROM-YYDDD          PIC 9(05).
+           05  WS-CONV-TO-YYDDD            PIC 9(05).
+           05  WS-CONV-RC                  PIC S9(04) COMP.
+
+       01  WS-BACKDATE-LIMIT               PIC S9(05) COMP-3 VALUE 95.
+
+       01  WS-FAIL-ERR-CD                  PIC X(04).
+       01  WS-ABEND-CD                     PIC X(04).
+       01  WS-ABEND-RSN                    PIC X(40).
+       01  WS-DETECT-PARA-LIT               PIC X(30).
+
+       01  WS-CALL-PARM-AREA.
+           05  WS-HASH-SEQ-IN               PIC S9(09) COMP-3.
+           05  WS-HASH-OCN-IN                PIC X(04).
+
+       PROCEDURE DIVISION.
+
+       S000-MAINLINE SECTION.
+       P0000-MAINLINE.
+           PERFORM P1000-INIT THRU P1000-EXIT.
+           PERFORM P2000-PROCESS THRU P2000-EXIT
+               UNTIL WS-EOF.
+           PERFORM P8000-CONTROL THRU P8000-EXIT.
+           PERFORM P9000-TERM THRU P9000-EXIT.
+           STOP RUN.
+
+       S100-INIT SECTION.
+       P1000-INIT.
+           PERFORM P1100-OPEN-FILES THRU P1100-EXIT.
+           PERFORM P1200-READ-PARM-CARD THRU P1200-EXIT.
+           PERFORM P2100-READ-DUPIN THRU P2100-EXIT.
+       P1000-EXIT.
+           EXIT.
+
+       P1100-OPEN-FILES.
+           OPEN INPUT  DUPIN.
+           OPEN OUTPUT DTVOUT.
+           OPEN OUTPUT SUSOUT.
+           OPEN OUTPUT CTLOUT.
+           IF WS-FS-INPUT NOT = '00'
+               MOVE 'I001' TO WS-ABEND-CD
+               MOVE 'CABING04 - DUPIN OPEN FAILED' TO WS-ABEND-RSN
+               CALL 'CABABEND' USING WS-ABEND-CD WS-ABEND-RSN.
+       P1100-EXIT.
+           EXIT.
+
+      * DW-PIVOT-YY (FROM CABSDATE) DRIVES CENTURY DERIVATION FOR
+      * THE CYCLE DATE, BUT SEE P3100-PIVOT-CENTURY FOR THE TWO
+      * INLINE LITERAL 70 TESTS THAT ALSO EXIST IN THIS PROGRAM.
+       P1200-READ-PARM-CARD.
+           CALL 'CABPARMR' USING WS-PARM-CARD-AREA.
+           MOVE WS-PARM-RUN-ID           TO CT-RUN-ID.
+           MOVE WS-PGM-NAME              TO CT-PROCESS-ID.
+           MOVE WS-PARM-CYCLE-YYDDD      TO CT-CYCLE-YYDDD.
+           MOVE WS-PARM-RERUN-NBR        TO CT-RERUN-NBR.
+           MOVE 3                        TO CT-STEP-SEQ.
+           MOVE WS-PARM-CYCLE-YYDDD      TO WS-CYCLE-DATE.
+       P1200-EXIT.
+           EXIT.
+
+       S200-PROCESS SECTION.
+       P2000-PROCESS.
+           MOVE 'Y' TO WS-DATE-VALID-SW.
+           MOVE SPACES TO WS-FAIL-ERR-CD.
+           PERFORM P3000-VALIDATE-CONN THRU P3000-EXIT.
+           IF WS-DATE-VALID
+               PERFORM P3500-VALIDATE-DISC THRU P3500-EXIT.
+           IF WS-DATE-VALID
+               PERFORM P3700-CROSS-CHECK-DATES THRU P3700-EXIT.
+           IF WS-DATE-VALID
+               PERFORM P3900-CONVERT-DATES THRU P3900-EXIT.
+           IF WS-DATE-VALID
+               PERFORM P2800-WRITE-VALID THRU P2800-EXIT
+           ELSE
+               PERFORM P2700-BUILD-SUSPENSE THRU P2700-EXIT.
+           PERFORM P2100-READ-DUPIN THRU P2100-EXIT.
+       P2000-EXIT.
+           EXIT.
+
+       P2100-READ-DUPIN.
+           READ DUPIN
+               AT END
+                   MOVE 'Y' TO WS-EOF-SW
+               NOT AT END
+                   ADD 1 TO WS-READ-CNT.
+       P2100-EXIT.
+           EXIT.
+
+      * CONNECT-SIDE VALIDATION - DDD RANGE, PIVOTED CENTURY AND A
+      * REAL LEAP-YEAR TEST ON THE DERIVED CCYY.
+       P3000-VALIDATE-CONN.
+           MOVE CD-CONN-YY  TO WS-CONN-YY.
+           MOVE CD-CONN-DDD TO WS-CONN-DDD.
+           IF WS-CONN-DDD < 1 OR WS-CONN-DDD > 366
+               MOVE EC-DATE-INVALID TO WS-FAIL-ERR-CD
+               MOVE 'N' TO WS-DATE-VALID-SW
+               ADD 1 TO WS-CONN-FAIL-CNT
+               GO TO P3000-EXIT.
+           PERFORM P3100-PIVOT-CENTURY THRU P3100-EXIT.
+           PERFORM P3200-CHECK-LEAP-YEAR THRU P3200-EXIT.
+           IF WS-CONN-DDD > WS-LEAP-MAX-DDD
+               MOVE EC-DATE-INVALID TO WS-FAIL-ERR-CD
+               MOVE 'N' TO WS-DATE-VALID-SW
+               ADD 1 TO WS-CONN-FAIL-CNT.
+       P3000-EXIT.
+           EXIT.
+
+      * CABS-STD-019 - DW-PIVOT-YY FROM CABSDATE DRIVES THE REAL
+      * CENTURY DERIVATION, BUT THE LITERAL 70 IS ALSO HARDCODED
+      * INLINE BELOW - ESTATE CONVENTION, NOT A TYPO.  DO NOT
+      * CONSOLIDATE THE TWO INTO ONE TEST.
+       P3100-PIVOT-CENTURY.
+           IF WS-CONN-YY > 70
+               MOVE 19 TO DW-CENTURY-WORK
+           ELSE
+               MOVE 20 TO DW-CENTURY-WORK.
+           IF CD-CONN-YY > 70
+               COMPUTE WS-CONN-CCYY = (DW-CENTURY-WORK * 100) +
+                   WS-CONN-YY
+           ELSE
+               COMPUTE WS-CONN-CCYY = (DW-CENTURY-WORK * 100) +
+                   WS-CONN-YY.
+       P3100-EXIT.
+           EXIT.
+
+      * REAL LEAP-YEAR COMPUTATION ON THE DERIVED CCYY - DIVISIBLE
+      * BY 4, NOT BY 100 UNLESS ALSO BY 400.
+       P3200-CHECK-LEAP-YEAR.
+           DIVIDE WS-CONN-CCYY BY 4 GIVING WS-LEAP-CCYY
+               REMAINDER WS-LEAP-REM-4.
+           DIVIDE WS-CONN-CCYY BY 100 GIVING WS-LEAP-CCYY
+               REMAINDER WS-LEAP-REM-100.
+           DIVIDE WS-CONN-CCYY BY 400 GIVING WS-LEAP-CCYY
+               REMAINDER WS-LEAP-REM-400.
+           IF WS-LEAP-REM-4 = 0 AND WS-LEAP-REM-100 NOT = 0
+               MOVE 'Y' TO DW-LEAP-SW
+           ELSE
+               IF WS-LEAP-REM-400 = 0
+                   MOVE 'Y' TO DW-LEAP-SW
+               ELSE
+                   MOVE 'N' TO DW-LEAP-SW.
+           IF DW-IS-LEAP
+               MOVE 366 TO WS-LEAP-MAX-DDD
+           ELSE
+               MOVE 365 TO WS-LEAP-MAX-DDD.
+       P3200-EXIT.
+           EXIT.
+
+      * DISCONNECT-SIDE VALIDATION - CD-DISC-YYDDD IS AN UNGROUPED
+      * PIC 9(05), SO IT IS SPLIT WITH DIVIDE/REMAINDER RATHER
+      * THAN REFERENCE MODIFICATION.
+       P3500-VALIDATE-DISC.
+           DIVIDE CD-DISC-YYDDD BY 1000 GIVING WS-DISC-YY
+               REMAINDER WS-DISC-REMAINDER.
+           MOVE WS-DISC-REMAINDER TO WS-DISC-DDD.
+           IF WS-DISC-DDD < 1 OR WS-DISC-DDD > 366
+               MOVE EC-DATE-INVALID TO WS-FAIL-ERR-CD
+               MOVE 'N' TO WS-DATE-VALID-SW
+               ADD 1 TO WS-DISC-FAIL-CNT
+               GO TO P3500-EXIT.
+           IF WS-DISC-YY > 70
+               COMPUTE WS-DISC-CCYY = 1900 + WS-DISC-YY
+           ELSE
+               COMPUTE WS-DISC-CCYY = 2000 + WS-DISC-YY.
+       P3500-EXIT.
+           EXIT.
+
+      * CROSS-FIELD RULES: DISCONNECT NOT BEFORE CONNECT, CONNECT
+      * NOT MORE THAN WS-BACKDATE-LIMIT DAYS BEFORE THE CYCLE DATE,
+      * CONNECT NOT IN THE FUTURE RELATIVE TO THE CYCLE DATE.
+       P3700-CROSS-CHECK-DATES.
+           IF WS-DISC-CCYY < WS-CONN-CCYY
+               MOVE EC-DATE-INVALID TO WS-FAIL-ERR-CD
+               MOVE 'N' TO WS-DATE-VALID-SW
+               ADD 1 TO WS-CROSS-FAIL-CNT
+               GO TO P3700-EXIT.
+           IF WS-DISC-CCYY = WS-CONN-CCYY
+               AND WS-DISC-DDD < WS-CONN-DDD
+               MOVE EC-DATE-INVALID TO WS-FAIL-ERR-CD
+               MOVE 'N' TO WS-DATE-VALID-SW
+               ADD 1 TO WS-CROSS-FAIL-CNT
+               GO TO P3700-EXIT.
+      * DW-CMP-YY IS THE COMPARE-SIDE PIVOT FIELD FROM CABSDATE -
+      * REUSED HERE FOR THE CYCLE DATE'S OWN CENTURY DERIVATION.
+           MOVE WS-CYCLE-YY TO DW-CMP-YY.
+           MOVE WS-CYCLE-DDD TO DW-CMP-DDD.
+           IF DW-CMP-YY NOT > 70
+               MOVE 20 TO DW-CENTURY-WORK
+           ELSE
+               MOVE 19 TO DW-CENTURY-WORK.
+           IF CD-CONN-YYDDD > WS-CYCLE-DATE
+               MOVE EC-DATE-INVALID TO WS-FAIL-ERR-CD
+               MOVE 'N' TO WS-DATE-VALID-SW
+               ADD 1 TO WS-CROSS-FAIL-CNT
+               GO TO P3700-EXIT.
+           MOVE CD-CONN-YYDDD TO WS-CONV-FROM-YYDDD.
+           MOVE WS-CYCLE-DATE TO WS-CONV-TO-YYDDD.
+           CALL 'CABDTCNV' USING WS-CONV-FROM-YYDDD WS-CONV-TO-YYDDD
+                                 DW-DAYS-DIFF WS-CONV-RC.
+           IF DW-DAYS-DIFF > WS-BACKDATE-LIMIT
+               MOVE EC-DATE-INVALID TO WS-FAIL-ERR-CD
+               MOVE 'N' TO WS-DATE-VALID-SW
+               ADD 1 TO WS-CROSS-FAIL-CNT.
+       P3700-EXIT.
+           EXIT.
+
+       P3900-CONVERT-DATES.
+           MOVE CD-CONN-YYDDD TO WS-CONV-FROM-YYDDD.
+           MOVE CD-DISC-YYDDD TO WS-CONV-TO-YYDDD.
+           CALL 'CABDTCNV' USING WS-CONV-FROM-YYDDD WS-CONV-TO-YYDDD
+                                 DW-DAYS-DIFF WS-CONV-RC.
+           IF WS-CONV-RC NOT = ZERO
+               MOVE EC-DATE-INVALID TO WS-FAIL-ERR-CD
+               MOVE 'N' TO WS-DATE-VALID-SW
+               ADD 1 TO WS-CONV-FAIL-CNT.
+       P3900-EXIT.
+           EXIT.
+
+       P2700-BUILD-SUSPENSE.
+           MOVE WS-FAIL-ERR-CD    TO SU-ERR-CODE.
+           MOVE 'E'               TO SU-ERR-SEVERITY.
+           MOVE WS-PGM-NAME       TO SU-DETECT-PGM.
+           MOVE 'P2000-PROCESS'   TO WS-DETECT-PARA-LIT.
+           MOVE WS-DETECT-PARA-LIT TO SU-DETECT-PARA.
+           MOVE CT-RUN-ID         TO SU-RUN-ID.
+           MOVE CABS-CDR-RECORD   TO SU-ORIG-RECORD.
+           MOVE SPACES            TO SU-FILLER.
+           CALL 'CABERRWR' USING CABS-SUSPENSE-RECORD.
+           WRITE SUS-OUT-RECORD FROM CABS-SUSPENSE-RECORD.
+           ADD 1 TO WS-REJECT-CNT.
+       P2700-EXIT.
+           EXIT.
+
+       P2800-WRITE-VALID.
+           WRITE DTV-OUT-RECORD FROM CABS-CDR-RECORD.
+           ADD 1 TO WS-WRITE-CNT.
+           MOVE CD-SEQ-NBR TO WS-HASH-SEQ-IN.
+           MOVE CD-OCN     TO WS-HASH-OCN-IN.
+           CALL 'CABHASH' USING WS-ACC-SEQ-HASH WS-HASH-SEQ-IN
+                                 WS-ACC-OCN-HASH WS-HASH-OCN-IN.
+       P2800-EXIT.
+           EXIT.
+
+       S800-CONTROL SECTION.
+       P8000-CONTROL.
+           MOVE WS-PGM-NAME     TO CT-JOBNAME.
+           MOVE WS-PGM-NAME     TO CT-STEPNAME.
+           MOVE ZERO            TO CT-BILL-PERIOD.
+           MOVE WS-READ-CNT     TO CT-READ.
+           MOVE WS-WRITE-CNT    TO CT-WRITTEN.
+           MOVE WS-REJECT-CNT   TO CT-REJECTED.
+           MOVE ZERO            TO CT-SUMMARISED.
+           MOVE ZERO            TO CT-CARRIED-FWD.
+           MOVE WS-ACC-MINUTES  TO CT-HASH-MINUTES.
+           MOVE WS-ACC-AMOUNT   TO CT-HASH-AMOUNT.
+           MOVE WS-ACC-SEQ-HASH TO CT-HASH-SEQ.
+           MOVE WS-ACC-OCN-HASH TO CT-HASH-OCN.
+           IF CT-READ = CT-WRITTEN + CT-REJECTED
+                        + CT-SUMMARISED + CT-CARRIED-FWD
+               MOVE 'B' TO CT-BAL-IND
+           ELSE
+               MOVE 'O' TO CT-BAL-IND.
+           MOVE ZERO   TO CT-RC.
+           MOVE SPACES TO CT-ABEND-CD.
+           MOVE SPACES TO CT-RESTART-KEY.
+           MOVE SPACES TO CT-FILLER.
+           WRITE CTL-OUT-RECORD FROM CABS-CONTROL-RECORD.
+       P8000-EXIT.
+           EXIT.
+
+       S900-TERM SECTION.
+       P9000-TERM.
+           CLOSE DUPIN.
+           CLOSE DTVOUT.
+           CLOSE SUSOUT.
+           CLOSE CTLOUT.
+       P9000-EXIT.
+           EXIT.

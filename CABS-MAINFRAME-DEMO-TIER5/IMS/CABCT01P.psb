@@ -1,0 +1,22 @@
+*****************************************************************
+* CABCT01P - PSB FOR CABCT01 (CARRIER MASTER MAINTENANCE)       *
+* FULL SENSITIVITY TO CABCARDB - ALL FOUR SEGMENTS.  ONE PCB.   *
+* PROCOPT=G (GET ONLY) - MAINTENANCE IS DONE THROUGH THE ONLINE *
+* CARRIER MAINTENANCE TRANSACTION, NOT THIS BATCH EXTRACT.      *
+* REVISION HISTORY                                              *
+*   V1.00  1989-04-11  R.OKAFOR    INITIAL GEN                  *
+*   V1.01  1994-11-08  L.FENNIMORE SENSEG CARRAGMT ADDED AFTER   *
+*                                  CABCARDB V1.03                *
+*   V1.02  2011-06-02  M.OYELARAN  RECOMPILE, NO SENSITIVITY     *
+*                                  CHANGES                       *
+*****************************************************************
+         PRINT NOGEN
+*
+         PCB   TYPE=DB,DBDNAME=CABCARDB,KEYLEN=12,PROCOPT=G
+         SENSEG NAME=CARRSEG,PARENT=0
+         SENSEG NAME=CARRBILL,PARENT=CARRSEG
+         SENSEG NAME=CARRFACT,PARENT=CARRSEG
+         SENSEG NAME=CARRAGMT,PARENT=CARRSEG
+*
+         PSBGEN LANG=COBOL,PSBNAME=CABCT01P,CMPAT=YES
+         END

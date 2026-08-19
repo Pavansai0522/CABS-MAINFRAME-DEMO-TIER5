@@ -1,0 +1,870 @@
+      *****************************************************************
+      * CABRAT04 - SPECIAL ACCESS FIXED-RATE APPLICATION              *
+      * APPLICATION : CABS                                            *
+      * INPUTS      : DDNAME  DSN                          COPYBOOK   *
+      *               SPCIN   TELCABS.CABS.USAGE.SPCL(0)   CABSCDR    *
+      *               CIRCMST TELCABS.CABS.CIRCUIT (VSAM KSDS)CABSCIRC*
+      *               RATEMST TELCABS.CABS.RATE (VSAM KSDS) CABSRATE  *
+      * OUTPUTS     : DDNAME  DSN                          COPYBOOK   *
+      *               RATOUT  TELCABS.CABS.RATED(+1)        (LOCAL)   *
+      *               BDTLOUT TELCABS.CABS.BILLDTL(+1)      CABSBILL  *
+      *               SUSOUT  TELCABS.CABS.USAGE.SUSPENSE(+1)CABSERR  *
+      *               RPTOUT  SYSOUT CLASS A                CABSPRNT  *
+      * CONTROL     : CTLOUT                               CABSCTL    *
+      * BALANCE     : CT-READ = CT-WRITTEN + CT-REJECTED +             *
+      *               CT-SUMMARISED + CT-CARRIED-FWD                  *
+      * RESTART     : FULL RERUN                                      *
+      * REVISION HISTORY                                              *
+      *   V1.00  1988-09-19  R.T.WHEELER  INITIAL RELEASE - FLAT      *
+      *                      MONTHLY RATE, NO PRORATION, FULL MONTH   *
+      *                      CHARGED REGARDLESS OF INSTALL/DISCONNECT *
+      *   V1.03  1990-11-05  D.OKONKWO    PART-MONTH PRORATION ADDED  *
+      *                      PER TARIFF REVISION - DAY-COUNT BASIS    *
+      *   V1.06  1995-04-18  J.M.CASTILLO TERM DISCOUNT TIERS ADDED   *
+      *                      FOR 12/24/36 MONTH COMMITMENTS           *
+      *   V1.08  1999-07-30  J.M.CASTILLO 60-MONTH TIER ADDED TO THE  *
+      *                      DISCOUNT TABLE PER SALES REQUEST         *
+      *   V1.11  2004-02-11  P.NAIR       MEET-POINT BILLING SPLIT    *
+      *                      ADDED FOR JOINTLY PROVISIONED CIRCUITS   *
+      *   V1.13  2008-10-06  A.BUKOWSKI   TERM-EXPIRED SUSPENSE ADDED *
+      *                      SO STALE CONTRACT DATA STOPS BILLING AT  *
+      *                      THE OLD RATE INSTEAD OF AUTO-RENEWING    *
+      *   V1.15  2013-05-14  S.MARCHETTI  USOC CROSS-REFERENCE MOVED  *
+      *                      TO AN EMBEDDED TABLE - PREVIOUSLY READ   *
+      *                      FROM A SECOND VSAM FILE, NOW RETIRED     *
+      *   V1.17  2019-01-08  G.PRZYBYLSKI RATE FALLBACK TO A STATE-   *
+      *                      GENERIC RATEMST ROW ADDED FOR USOCS      *
+      *                      NOT YET LOADED STATE BY STATE            *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CABRAT04.
+       AUTHOR. TELCABS APPLICATIONS - RATING TEAM.
+      *****************************************************************
+      * SPECIAL ACCESS IS NOT USAGE-SENSITIVE - IT IS A FLAT MONTHLY  *
+      * RECURRING CHARGE PER CIRCUIT PER USOC.  FOR EACH RECORD THE   *
+      * CIRCUIT IS LOOKED UP ON CIRCMST FOR ITS USOC AND TERM, THE    *
+      * FLAT RATE IS LOOKED UP ON RATEMST BY TARIFF/USOC-DERIVED      *
+      * ELEMENT/JURISDICTION/STATE, THE CHARGE IS PRORATED FOR A      *
+      * PART-MONTH INSTALL OR DISCONNECT, A TERM-DISCOUNT TIER IS     *
+      * APPLIED, AND A MEET-POINT PERCENTAGE SPLIT IS APPLIED WHEN    *
+      * THE USAGE RECORD CARRIES ONE.  THIS PROGRAM COPIES CABSRT01,  *
+      * WHICH NESTS RT02, RT03 AND RT04 - ONLY THE ROUNDING WORK AREA *
+      * (R4) IS ACTUALLY USED HERE, THE RATE TABLE AND BAND POOL ARE  *
+      * NOT, BECAUSE THIS PROGRAM RATES BY RANDOM LOOKUP AGAINST      *
+      * RATEMST RATHER THAN A PRELOADED IN-MEMORY TABLE.               *
+      *****************************************************************
+       ENVIRONMENT DIVISION.
+       CONFIGURATION SECTION.
+       SOURCE-COMPUTER. IBM-370.
+       OBJECT-COMPUTER. IBM-370.
+       SPECIAL-NAMES.
+           C01 IS TO-NEW-PAGE.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT SPCIN ASSIGN TO UT-S-SPCIN
+               ORGANIZATION IS SEQUENTIAL
+               ACCESS MODE IS SEQUENTIAL
+               FILE STATUS IS WS-FS-INPUT.
+           SELECT RATEMST ASSIGN TO DA-RATEMST
+               ORGANIZATION IS INDEXED
+               ACCESS MODE IS DYNAMIC
+               RECORD KEY IS RT-KEY
+               FILE STATUS IS WS-FS-TABLE.
+           SELECT RATOUT ASSIGN TO UT-S-RATOUT
+               ORGANIZATION IS SEQUENTIAL
+               ACCESS MODE IS SEQUENTIAL
+               FILE STATUS IS WS-FS-OUTPUT.
+           SELECT BDTLOUT ASSIGN TO UT-S-BDTLOUT
+               ORGANIZATION IS SEQUENTIAL
+               ACCESS MODE IS SEQUENTIAL
+               FILE STATUS IS WS-FS-OUTPUT.
+           SELECT SUSOUT ASSIGN TO UT-S-SUSOUT
+               ORGANIZATION IS SEQUENTIAL
+               ACCESS MODE IS SEQUENTIAL
+               FILE STATUS IS WS-FS-SUSPENSE.
+           SELECT CTLOUT ASSIGN TO UT-S-CTLOUT
+               ORGANIZATION IS SEQUENTIAL
+               ACCESS MODE IS SEQUENTIAL
+               FILE STATUS IS WS-FS-CONTROL.
+           SELECT RPTOUT ASSIGN TO UT-S-RPTOUT
+               ORGANIZATION IS SEQUENTIAL
+               ACCESS MODE IS SEQUENTIAL
+               FILE STATUS IS WS-FS-OUTPUT.
+       DATA DIVISION.
+       FILE SECTION.
+      * SPCIN - SPECIAL ACCESS USAGE, RECORD TYPES 05/06 ONLY.
+       FD  SPCIN
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 200 CHARACTERS.
+       COPY CABSCDR.
+      * RATEMST - ACCESS RATE TABLE, VSAM KSDS, DYNAMIC BROWSE PER
+      * CDR TO FIND THE CURRENTLY EFFECTIVE ROW FOR A DERIVED KEY.
+       FD  RATEMST
+           LABEL RECORDS ARE STANDARD.
+       COPY CABSRATE.
+      * RATOUT - RATED SPECIAL ACCESS PASS-THROUGH, ONE PER CDR.
+       FD  RATOUT
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 200 CHARACTERS.
+       01  CABS-RATOUT-RECORD.
+           05  RO-OCN                      PIC X(04).
+           05  RO-BAN                      PIC X(13).
+           05  RO-SEQ-NBR                  PIC 9(09) COMP-3.
+           05  RO-CIRCUIT-ID               PIC X(20).
+           05  RO-USOC                     PIC X(05).
+           05  RO-RATE-STATUS              PIC X(01).
+               88  RO-RATED                VALUE 'R'.
+               88  RO-SUSPENDED             VALUE 'S'.
+           05  RO-CYCLE-YYDDD              PIC 9(05).
+           05  RO-JURIS-CD                 PIC X(01).
+           05  RO-STATE-CD                 PIC X(02).
+           05  RO-PRORATE-FACTOR           PIC S9(01)V9(05) COMP-3.
+           05  RO-TOT-AMOUNT               PIC S9(11)V9(05) COMP-3.
+           05  RO-FILLER                   PIC X(122).
+      * BDTLOUT - BILL DETAIL, ONE ELEMENT PER SPECIAL ACCESS CDR.
+       FD  BDTLOUT
+           RECORDING MODE IS V
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD IS VARYING IN SIZE FROM 108 TO 1647 CHARACTERS
+               DEPENDING ON BD-ELEM-CNT.
+       COPY CABSBILL.
+      * SUSOUT - REJECTED / SUSPENDED USAGE.
+       FD  SUSOUT
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 300 CHARACTERS.
+       01  CABS-SUSPENSE-RECORD-FD.
+           05  FD-SU-ERR-CODE              PIC X(04).
+           05  FD-SU-ERR-SEVERITY          PIC X(01).
+           05  FD-SU-DETECT-PGM            PIC X(08).
+           05  FD-SU-DETECT-PARA           PIC X(30).
+           05  FD-SU-RUN-ID                PIC X(12).
+           05  FD-SU-ORIG-RECORD           PIC X(200).
+           05  FD-SU-FILLER                PIC X(45).
+      * CTLOUT - RUN CONTROL / BALANCING RECORD.
+       FD  CTLOUT
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 180 CHARACTERS.
+       01  CABS-CTLOUT-RECORD              PIC X(180).
+      * RPTOUT - EXCEPTION AND CONTROL SUMMARY REPORT.
+       FD  RPTOUT
+           RECORDING MODE IS FA
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 133 CHARACTERS.
+       COPY CABSPRNT.
+       WORKING-STORAGE SECTION.
+      * STANDARD SHARED WORKING STORAGE.  SEE CABSWRK.
+       COPY CABSWRK.
+      * CIRCUIT MASTER RECORD LAYOUT - CIRCMST IS NOT OPENED DIRECTLY
+      * BY THIS PROGRAM.  CABCIRCL OWNS THE VSAM ACCESS AND RETURNS
+      * THE CIRCUIT ROW HERE.
+       COPY CABSCIRC.
+      * RATING FAMILY CONTROL BLOCKS - EVERY RATING PROGRAM COPIES
+      * THIS EVEN WHEN, AS HERE, ONLY R4-ROUND-WORK IS USED.
+       COPY CABSRT01.
+       01  WS-PROGRAM-CONSTANTS.
+           05  WS-PGM-NAME                 PIC X(08) VALUE 'CABRAT04'.
+           05  WS-PGM-VERSION              PIC X(05) VALUE 'V1.17'.
+           05  WS-DEFAULT-TARIFF           PIC X(04) VALUE 'FCC1'.
+      * SYSIN PARM CARD - CYCLE DATE, CYCLE LENGTH IN DAYS AND BILL
+      * PERIOD DRIVE THE PRORATION DAY-COUNT.
+       01  WS-PARM-CARD                    PIC X(80).
+       01  WS-PARM-CARD-R1 REDEFINES WS-PARM-CARD.
+           05  PC1-CYCLE-YYDDD              PIC 9(05).
+           05  PC1-CYCLE-DAYS               PIC 9(02).
+           05  PC1-BILL-PERIOD              PIC 9(06).
+           05  PC1-TARIFF-CD                PIC X(04).
+           05  PC1-RUN-ID                   PIC X(12).
+           05  PC1-FILLER                   PIC X(51).
+       01  WS-CYCLE-RANGE-WORK.
+           05  WS-CYC-START-YYDDD          PIC 9(05) VALUE 0.
+           05  WS-CYC-START-DDD REDEFINES WS-CYC-START-YYDDD.
+               10  WS-CYS-YY                PIC 9(02).
+               10  WS-CYS-DDD               PIC 9(03).
+           05  WS-CYC-END-DDD              PIC 9(03) VALUE 0.
+           05  WS-CYC-TOTAL-DAYS           PIC S9(03) COMP-3 VALUE 0.
+      * USOC-TO-RATE-ELEMENT CROSS-REFERENCE - EMBEDDED LITERAL,
+      * FORMAT PER ENTRY USOC(5) ELEM(6) JURIS-DEFAULT(1) = 12 BYTES.
+      * REPLACED A SECOND VSAM FILE IN V1.15 (SEE HEADER).
+       01  WS-USOC-SEED.
+           05  FILLER PIC X(144) VALUE
+               'DS1XXDS1SPCIDS3XXDS3SPCIHCTS1HCSPC1SHCTS2HCSPC2S'
+      -        'VG1XXVGSPC S56KDSDS0SPCSTIE1XTIESPCIWATS1WATSPCI'
+      -        'FXNETFXSPC SMUXSVMUXSPCIOCU1XOCUSPCSTISVCTISPC S'.
+       01  WS-USOC-SEED-R REDEFINES WS-USOC-SEED.
+           05  WS-US-SEED-ENTRY OCCURS 12 TIMES.
+               10  WS-US-USOC               PIC X(05).
+               10  WS-US-ELEM               PIC X(06).
+               10  WS-US-JURIS              PIC X(01).
+       01  WS-USOC-XREF-WORK.
+           05  WS-UX-SUB                    PIC S9(03) COMP-3 VALUE 0.
+           05  WS-UX-FOUND-SW               PIC X(01) VALUE 'N'.
+               88  WS-UX-FOUND              VALUE 'Y'.
+      * TERM-DISCOUNT TIER TABLE - LOADED IN P1300 FROM LITERALS, NOT
+      * FROM A FILE.  ESCALATING DISCOUNT BY COMMITMENT LENGTH.
+       01  WS-TERM-DISCOUNT-TABLE.
+           05  WS-TD-ENTRY OCCURS 4 TIMES INDEXED BY WS-TD-X.
+               10  WS-TD-TERM-MONTHS        PIC 9(03).
+               10  WS-TD-DISCOUNT-PCT       PIC S9(03)V9(05) COMP-3.
+       01  WS-TERM-SEARCH-WORK.
+           05  WS-TS-FOUND-SW               PIC X(01) VALUE 'N'.
+               88  WS-TS-FOUND              VALUE 'Y'.
+           05  WS-SEL-DISCOUNT-PCT          PIC S9(03)V9(05) COMP-3
+                                                             VALUE 0.
+       01  WS-CIRCUIT-LOOKUP-WORK.
+           05  WS-CL-FOUND-SW               PIC X(01) VALUE 'N'.
+               88  WS-CL-FOUND              VALUE 'Y'.
+           05  WS-CL-TERM-END-DDD           PIC S9(05) COMP-3 VALUE 0.
+           05  WS-CL-TERM-EXPIRED-SW        PIC X(01) VALUE 'N'.
+               88  WS-CL-TERM-EXPIRED       VALUE 'Y'.
+      * RATE LOOKUP WORK - THE DERIVED KEY AND A TWO-LEVEL FALLBACK,
+      * EXACT STATE FIRST THEN A STATE-GENERIC ROW (STATE = SPACES).
+       01  WS-RATE-KEY-WORK.
+           05  WS-RK-TARIFF                 PIC X(04).
+           05  WS-RK-ELEM                   PIC X(06).
+           05  WS-RK-JURIS                  PIC X(01).
+           05  WS-RK-STATE                  PIC X(02).
+       01  WS-RATE-RESULT-WORK.
+           05  WS-RR-FOUND-SW               PIC X(01) VALUE 'N'.
+               88  WS-RR-FOUND              VALUE 'Y'.
+           05  WS-SEL-MRC-RATE              PIC S9(05)V9(05) COMP-3
+                                                             VALUE 0.
+           05  WS-SEL-ROUND-RULE            PIC X(01).
+           05  WS-SEL-ROUND-POS             PIC 9(01).
+      * PRORATION WORK - REAL DAY-COUNT AGAINST THE CYCLE BOUNDARIES.
+       01  WS-PRORATION-WORK.
+           05  WS-PR-EFF-START-DDD          PIC S9(05) COMP-3 VALUE 0.
+           05  WS-PR-EFF-END-DDD            PIC S9(05) COMP-3 VALUE 0.
+           05  WS-PR-BILLABLE-DAYS          PIC S9(05) COMP-3 VALUE 0.
+           05  WS-PR-FACTOR                 PIC S9(01)V9(05) COMP-3
+                                                             VALUE 0.
+           05  WS-PR-PART-MONTH-SW          PIC X(01) VALUE 'N'.
+               88  WS-PR-PART-MONTH         VALUE 'Y'.
+      * DAY-OF-YEAR COMPONENT VIEWS OF THE CIRCUIT'S INSTALL AND
+      * DISCONNECT DATES - NO REFERENCE MODIFICATION, REDEFINES ONLY.
+       01  WS-DATE-COMPONENT-WORK.
+           05  WS-DC-INSTALL-YYDDD           PIC 9(05) VALUE 0.
+           05  WS-DC-INSTALL-R REDEFINES WS-DC-INSTALL-YYDDD.
+               10  WS-DC-INSTALL-YY           PIC 9(02).
+               10  WS-DC-INSTALL-DDD          PIC 9(03).
+           05  WS-DC-DISC-YYDDD              PIC 9(05) VALUE 0.
+           05  WS-DC-DISC-R REDEFINES WS-DC-DISC-YYDDD.
+               10  WS-DC-DISC-YY               PIC 9(02).
+               10  WS-DC-DISC-DDD              PIC 9(03).
+      * AMOUNT WORK - EACH STAGE OF THE CALCULATION IS KEPT SEPARATE
+      * SO THE BILL DETAIL DESCRIPTION CAN SHOW THE BUILD-UP.
+       01  WS-AMOUNT-WORK.
+           05  WS-AM-FLAT-AMOUNT            PIC S9(11)V9(05) COMP-3
+                                                             VALUE 0.
+           05  WS-AM-PRORATED-AMOUNT        PIC S9(11)V9(05) COMP-3
+                                                             VALUE 0.
+           05  WS-AM-DISCOUNTED-AMOUNT      PIC S9(11)V9(05) COMP-3
+                                                             VALUE 0.
+           05  WS-AM-MPB-AMOUNT             PIC S9(11)V9(05) COMP-3
+                                                             VALUE 0.
+           05  WS-AM-FINAL-AMOUNT           PIC S9(11)V9(05) COMP-3
+                                                             VALUE 0.
+       01  WS-MPB-WORK.
+           05  WS-MPB-VALID-SW              PIC X(01) VALUE 'Y'.
+               88  WS-MPB-VALID             VALUE 'Y'.
+      * VALIDATION SWITCH - CARRIES A SINGLE RECORD THROUGH EACH
+      * CHECK.  ONCE 'N', NO FURTHER RATING STEP RUNS FOR THIS CDR.
+       01  WS-VALIDATION-WORK.
+           05  WS-VALID-SW                  PIC X(01) VALUE 'Y'.
+               88  WS-RECORD-VALID          VALUE 'Y'.
+           05  WS-CURRENT-ERR-CODE          PIC X(04) VALUE SPACES.
+      * BILL DESCRIPTION FRAGMENTS - ASSEMBLED VIA STRING.
+       01  WS-DESC-WORK.
+           05  WS-DESC-USOC                 PIC X(05).
+           05  WS-DESC-TERM                 PIC 9(03).
+           05  WS-DESC-ASSEMBLED            PIC X(60).
+       01  WS-ABEND-WORK.
+           05  WS-AB-PGM                    PIC X(08).
+           05  WS-AB-PARA                   PIC X(30).
+           05  WS-AB-REASON                 PIC X(60).
+           05  WS-AB-USER-CODE              PIC 9(04) VALUE 9904.
+       01  WS-EXT-CALL-RC.
+           05  WS-RC-DTCNV                  PIC 9(04) VALUE 0.
+           05  WS-RC-ERRWR                  PIC 9(04) VALUE 0.
+           05  WS-RC-HASH                   PIC 9(04) VALUE 0.
+           05  WS-RC-CIRCL                  PIC 9(04) VALUE 0.
+           05  WS-RC-ABEND                  PIC 9(04) VALUE 0.
+       01  WS-HASH-WORK.
+           05  WS-HW-OCN                    PIC S9(15) COMP-3 VALUE 0.
+           05  WS-HW-SEQ                    PIC S9(17) COMP-3 VALUE 0.
+           05  WS-HW-MINUTES                PIC S9(15)V9(02) COMP-3
+                                                             VALUE 0.
+           05  WS-HW-AMOUNT                 PIC S9(13)V9(05) COMP-3
+                                                             VALUE 0.
+       01  WS-ROUND-DISPATCH-WORK.
+           05  WS-RD-RULE-INDEX             PIC 9(01) VALUE 0.
+       01  WS-REPORT-WORK.
+           05  WS-RPT-PAGE-NBR              PIC S9(03) COMP-3 VALUE 0.
+           05  WS-RPT-TITLE1                 PIC X(60) VALUE
+               'CABRAT04 - SPECIAL ACCESS FIXED-RATE APPLICATION'.
+       01  WS-MISC-COUNTERS.
+           05  WS-MC-CIRCUIT-NOT-FOUND       PIC S9(07) COMP-3
+                                                             VALUE 0.
+           05  WS-MC-RATE-NOT-FOUND          PIC S9(07) COMP-3
+                                                             VALUE 0.
+           05  WS-MC-MPB-INVALID             PIC S9(07) COMP-3
+                                                             VALUE 0.
+           05  WS-MC-TERM-EXPIRED            PIC S9(07) COMP-3
+                                                             VALUE 0.
+           05  WS-MC-PART-MONTH-CNT          PIC S9(07) COMP-3
+                                                             VALUE 0.
+           05  WS-MC-MPB-SPLIT-CNT           PIC S9(07) COMP-3
+                                                             VALUE 0.
+           05  WS-MC-STATE-FALLBACK-CNT      PIC S9(07) COMP-3
+                                                             VALUE 0.
+       PROCEDURE DIVISION.
+      * P0000-MAINLINE - MANDATORY CABS BATCH SHAPE.
+       P0000-MAINLINE.
+           PERFORM P1000-INIT THRU P1000-EXIT.
+           PERFORM P2000-PROCESS THRU P2000-EXIT UNTIL WS-EOF.
+           PERFORM P8000-CONTROL THRU P8000-EXIT.
+           PERFORM P9000-TERM THRU P9000-EXIT.
+           STOP RUN.
+      * S100-INITIALISATION SECTION
+       S100-INITIALISATION SECTION.
+       P1000-INIT.
+           PERFORM P1100-OPEN-FILES THRU P1100-EXIT.
+           PERFORM P1200-READ-PARM THRU P1200-EXIT.
+           PERFORM P1300-BUILD-TERM-TABLE THRU P1300-EXIT.
+           PERFORM P1500-COMPUTE-CYCLE-RANGE THRU P1500-EXIT.
+           PERFORM P1600-READ-FIRST-SPCIN THRU P1600-EXIT.
+       P1000-EXIT.
+           EXIT.
+      * P1100-OPEN-FILES - THE ABEND REASON IS JUST THE DDNAME, THE
+      * PARAGRAPH NAME IS SET ONCE IN P9900 ITSELF.
+       P1100-OPEN-FILES.
+           OPEN INPUT SPCIN.
+           IF WS-FS-INPUT NOT = '00'
+               MOVE 'SPCIN' TO WS-AB-REASON
+               PERFORM P9900-FATAL-OPEN THRU P9900-EXIT.
+           OPEN INPUT RATEMST.
+           IF WS-FS-TABLE NOT = '00'
+               MOVE 'RATEMST' TO WS-AB-REASON
+               PERFORM P9900-FATAL-OPEN THRU P9900-EXIT.
+           OPEN OUTPUT RATOUT.
+           IF WS-FS-OUTPUT NOT = '00'
+               MOVE 'RATOUT' TO WS-AB-REASON
+               PERFORM P9900-FATAL-OPEN THRU P9900-EXIT.
+           OPEN OUTPUT BDTLOUT.
+           IF WS-FS-OUTPUT NOT = '00'
+               MOVE 'BDTLOUT' TO WS-AB-REASON
+               PERFORM P9900-FATAL-OPEN THRU P9900-EXIT.
+           OPEN OUTPUT SUSOUT.
+           IF WS-FS-SUSPENSE NOT = '00'
+               MOVE 'SUSOUT' TO WS-AB-REASON
+               PERFORM P9900-FATAL-OPEN THRU P9900-EXIT.
+           OPEN OUTPUT CTLOUT.
+           IF WS-FS-CONTROL NOT = '00'
+               MOVE 'CTLOUT' TO WS-AB-REASON
+               PERFORM P9900-FATAL-OPEN THRU P9900-EXIT.
+           OPEN OUTPUT RPTOUT.
+           IF WS-FS-OUTPUT NOT = '00'
+               MOVE 'RPTOUT' TO WS-AB-REASON
+               PERFORM P9900-FATAL-OPEN THRU P9900-EXIT.
+       P1100-EXIT.
+           EXIT.
+       P1200-READ-PARM.
+           MOVE SPACES TO WS-PARM-CARD.
+           ACCEPT WS-PARM-CARD FROM SYSIN.
+           MOVE PC1-TARIFF-CD TO R1-TARIFF-CD.
+           IF R1-TARIFF-CD = SPACES
+               MOVE WS-DEFAULT-TARIFF TO R1-TARIFF-CD.
+           MOVE PC1-RUN-ID TO R1-RUN-ID.
+           MOVE PC1-CYCLE-YYDDD TO R1-CYCLE-YYDDD.
+           MOVE PC1-BILL-PERIOD TO R1-BILL-PERIOD.
+       P1200-EXIT.
+           EXIT.
+      * P1300-BUILD-TERM-TABLE - ESCALATING TERM-DISCOUNT TIERS.
+       P1300-BUILD-TERM-TABLE.
+           MOVE 12 TO WS-TD-TERM-MONTHS (1).
+           MOVE 0.05000 TO WS-TD-DISCOUNT-PCT (1).
+           MOVE 24 TO WS-TD-TERM-MONTHS (2).
+           MOVE 0.10000 TO WS-TD-DISCOUNT-PCT (2).
+           MOVE 36 TO WS-TD-TERM-MONTHS (3).
+           MOVE 0.15000 TO WS-TD-DISCOUNT-PCT (3).
+           MOVE 60 TO WS-TD-TERM-MONTHS (4).
+           MOVE 0.20000 TO WS-TD-DISCOUNT-PCT (4).
+       P1300-EXIT.
+           EXIT.
+      * P1500-COMPUTE-CYCLE-RANGE - CYCLE START AND END DAY-OF-YEAR.
+      * ASSUMES THE CYCLE DOES NOT CROSS A YEAR BOUNDARY - TRUE FOR
+      * EVERY STANDARD 28-31 DAY BILLING CYCLE IN PRACTICE.
+       P1500-COMPUTE-CYCLE-RANGE.
+           MOVE PC1-CYCLE-YYDDD TO WS-CYC-START-YYDDD.
+           IF PC1-CYCLE-DAYS > 0
+               COMPUTE WS-CYC-END-DDD = WS-CYS-DDD + PC1-CYCLE-DAYS - 1
+               MOVE PC1-CYCLE-DAYS TO WS-CYC-TOTAL-DAYS
+           ELSE
+               COMPUTE WS-CYC-END-DDD = WS-CYS-DDD + 29
+               MOVE 30 TO WS-CYC-TOTAL-DAYS.
+       P1500-EXIT.
+           EXIT.
+       P1600-READ-FIRST-SPCIN.
+           PERFORM P2100-READ-SPCIN THRU P2100-EXIT.
+       P1600-EXIT.
+           EXIT.
+       P9900-FATAL-OPEN.
+           MOVE WS-PGM-NAME TO WS-AB-PGM.
+           MOVE 'P1100-OPEN-FILES' TO WS-AB-PARA.
+           CALL 'CABABEND' USING WS-AB-PGM WS-AB-PARA WS-AB-REASON
+               WS-AB-USER-CODE WS-RC-ABEND.
+       P9900-EXIT.
+           EXIT.
+      * S200-MAIN-PROCESS SECTION - ONE PASS PER SPCIN RECORD.
+       S200-MAIN-PROCESS SECTION.
+       P2000-PROCESS.
+           ADD 1 TO WS-READ-CNT.
+           MOVE 'Y' TO WS-VALID-SW.
+           PERFORM P2200-VALIDATE-REC-TYPE THRU P2200-EXIT.
+           IF WS-RECORD-VALID
+               PERFORM P2300-LOOKUP-CIRCUIT THRU P2300-EXIT.
+           IF WS-RECORD-VALID
+               PERFORM P2350-CHECK-TERM-EXPIRED THRU P2350-EXIT.
+           IF WS-RECORD-VALID
+               PERFORM P2400-LOOKUP-RATE THRU P2400-EXIT.
+           IF WS-RECORD-VALID
+               PERFORM P2750-VALIDATE-MPB-PCT THRU P2750-EXIT.
+           IF WS-RECORD-VALID
+               PERFORM P2500-COMPUTE-PRORATION THRU P2500-EXIT
+               PERFORM P2600-APPLY-TERM-DISCOUNT THRU P2600-EXIT
+               PERFORM P2700-APPLY-MPB-SPLIT THRU P2700-EXIT
+               PERFORM P2900-ROUND-AMOUNT THRU P2900-EXIT
+               PERFORM P3000-WRITE-RATED-OUTPUT THRU P3000-EXIT
+           ELSE
+               PERFORM P3900-REJECT-TO-SUSPENSE THRU P3900-EXIT.
+           PERFORM P2100-READ-SPCIN THRU P2100-EXIT.
+       P2000-EXIT.
+           EXIT.
+       P2100-READ-SPCIN.
+           IF NOT WS-EOF
+               READ SPCIN
+                   AT END MOVE 'Y' TO WS-EOF-SW.
+       P2100-EXIT.
+           EXIT.
+      * P2200-VALIDATE-REC-TYPE - ONLY 05/06 IS EXPECTED ON SPCIN.
+       P2200-VALIDATE-REC-TYPE.
+           IF NOT CD-SPECIAL-ACC
+               MOVE 'N' TO WS-VALID-SW
+               MOVE EC-DATE-INVALID TO WS-CURRENT-ERR-CODE.
+       P2200-EXIT.
+           EXIT.
+      * P2300-LOOKUP-CIRCUIT - CABCIRCL OWNS THE CIRCMST VSAM ACCESS.
+       P2300-LOOKUP-CIRCUIT.
+           MOVE CD-SP-CIRCUIT-ID TO CI-CIRCUIT-ID.
+           CALL 'CABCIRCL' USING CI-CIRCUIT-ID CABS-CIRCUIT-RECORD
+               WS-RC-CIRCL.
+           MOVE 'N' TO WS-CL-FOUND-SW.
+           IF WS-RC-CIRCL = 0
+               MOVE 'Y' TO WS-CL-FOUND-SW.
+           IF NOT WS-CL-FOUND
+               MOVE 'N' TO WS-VALID-SW
+               MOVE EC-CIRCUIT-UNKNOWN TO WS-CURRENT-ERR-CODE
+               ADD 1 TO WS-MC-CIRCUIT-NOT-FOUND.
+       P2300-EXIT.
+           EXIT.
+      * P2350-CHECK-TERM-EXPIRED - CONTRACT TERM ALREADY ENDED BUT
+      * THE CIRCUIT STILL SHOWS ACTIVE (CI-DISC-YYDDD = ZERO).  DAY-
+      * OF-YEAR ARITHMETIC ONLY, SAME YEAR-WRAP ASSUMPTION AS P1500.
+       P2350-CHECK-TERM-EXPIRED.
+           MOVE 'N' TO WS-CL-TERM-EXPIRED-SW.
+           IF CI-TERM-MONTHS > 0 AND CI-DISC-YYDDD = 0
+               COMPUTE WS-CL-TERM-END-DDD =
+                   CI-INSTALL-YYDDD + (CI-TERM-MONTHS * 30)
+               IF WS-CL-TERM-END-DDD < WS-CYS-DDD
+                   MOVE 'Y' TO WS-CL-TERM-EXPIRED-SW.
+           IF WS-CL-TERM-EXPIRED
+               MOVE 'N' TO WS-VALID-SW
+               MOVE EC-TERM-EXPIRED TO WS-CURRENT-ERR-CODE
+               ADD 1 TO WS-MC-TERM-EXPIRED.
+       P2350-EXIT.
+           EXIT.
+      * S250-RATE-LOOKUP SECTION - USOC CROSS-REFERENCE THEN A TWO-
+      * LEVEL RATEMST LOOKUP, EXACT STATE THEN STATE-GENERIC.
+       S250-RATE-LOOKUP SECTION.
+       P2400-LOOKUP-RATE.
+           PERFORM P2410-XREF-USOC THRU P2410-EXIT.
+           IF WS-RECORD-VALID
+               MOVE R1-TARIFF-CD TO WS-RK-TARIFF
+               MOVE CI-STATE-CD TO WS-RK-STATE
+               PERFORM P2430-TRY-RATE-KEY THRU P2430-EXIT
+               IF NOT WS-RR-FOUND
+                   MOVE SPACES TO WS-RK-STATE
+                   PERFORM P2430-TRY-RATE-KEY THRU P2430-EXIT
+                   IF WS-RR-FOUND
+                       ADD 1 TO WS-MC-STATE-FALLBACK-CNT.
+           IF NOT WS-RR-FOUND
+               MOVE 'N' TO WS-VALID-SW
+               MOVE EC-RATE-NOT-FOUND TO WS-CURRENT-ERR-CODE
+               ADD 1 TO WS-MC-RATE-NOT-FOUND.
+       P2400-EXIT.
+           EXIT.
+      * P2410-XREF-USOC - LINEAR SEARCH OF THE 12-ROW SEED TABLE.
+       P2410-XREF-USOC.
+           MOVE 'N' TO WS-UX-FOUND-SW.
+           PERFORM P2420-SEARCH-ONE-USOC THRU P2420-EXIT
+               VARYING WS-UX-SUB FROM 1 BY 1
+               UNTIL WS-UX-SUB > 12 OR WS-UX-FOUND.
+           IF NOT WS-UX-FOUND
+               MOVE 'N' TO WS-VALID-SW
+               MOVE EC-RATE-NOT-FOUND TO WS-CURRENT-ERR-CODE
+               MOVE 'N' TO WS-RR-FOUND-SW.
+       P2410-EXIT.
+           EXIT.
+       P2420-SEARCH-ONE-USOC.
+           IF WS-US-USOC (WS-UX-SUB) = CI-USOC
+               MOVE WS-US-ELEM (WS-UX-SUB) TO WS-RK-ELEM
+               MOVE WS-US-JURIS (WS-UX-SUB) TO WS-RK-JURIS
+               MOVE 'Y' TO WS-UX-FOUND-SW.
+       P2420-EXIT.
+           EXIT.
+       P2430-TRY-RATE-KEY.
+           MOVE WS-RK-TARIFF TO RT-TARIFF-CD.
+           MOVE WS-RK-ELEM TO RT-RATE-ELEM.
+           MOVE WS-RK-JURIS TO RT-JURIS-CD.
+           MOVE WS-RK-STATE TO RT-STATE-CD.
+           MOVE R1-CYCLE-YYDDD TO RT-EFF-YYDDD.
+           START RATEMST KEY NOT LESS THAN RT-KEY
+               INVALID KEY MOVE 'N' TO WS-RR-FOUND-SW.
+           IF WS-RR-FOUND-SW NOT = 'N'
+               READ RATEMST NEXT RECORD
+                   AT END MOVE 'N' TO WS-RR-FOUND-SW
+                   NOT AT END PERFORM P2440-CHECK-RATE-ROW
+                       THRU P2440-EXIT.
+       P2430-EXIT.
+           EXIT.
+      * P2440-CHECK-RATE-ROW - THE ROW FOUND MUST STILL MATCH THE
+      * SEARCH KEY (TARIFF/ELEM/JURIS/STATE) AND BE CURRENTLY IN
+      * EFFECT - START ONLY GUARANTEES THE ROW IS NOT LESS THAN THE
+      * SEARCH KEY, NOT THAT IT SHARES THE SAME NON-DATE KEY.
+       P2440-CHECK-RATE-ROW.
+           IF RT-TARIFF-CD = WS-RK-TARIFF AND
+                   RT-RATE-ELEM = WS-RK-ELEM AND
+                   RT-JURIS-CD = WS-RK-JURIS AND
+                   RT-STATE-CD = WS-RK-STATE AND
+                   (RT-EXP-YYDDD = 0 OR
+                    RT-EXP-YYDDD NOT < R1-CYCLE-YYDDD)
+               MOVE 'Y' TO WS-RR-FOUND-SW
+               MOVE RT-INITIAL-RATE TO WS-SEL-MRC-RATE
+               MOVE RT-ROUND-RULE TO WS-SEL-ROUND-RULE
+               MOVE RT-ROUND-POS TO WS-SEL-ROUND-POS
+           ELSE
+               MOVE 'N' TO WS-RR-FOUND-SW.
+       P2440-EXIT.
+           EXIT.
+      * S300-CALCULATION SECTION - PRORATION, DISCOUNT AND MPB SPLIT.
+       S300-CALCULATION SECTION.
+      * P2500-COMPUTE-PRORATION - REAL DAY-COUNT.  A MID-CYCLE
+      * INSTALL OR DISCONNECT NARROWS THE BILLABLE WINDOW; OTHERWISE
+      * THE FULL CYCLE APPLIES.  COMPUTE ROUNDED PER CONVENTION.
+       P2500-COMPUTE-PRORATION.
+           MOVE CI-INSTALL-YYDDD TO WS-DC-INSTALL-YYDDD.
+           MOVE CI-DISC-YYDDD TO WS-DC-DISC-YYDDD.
+           MOVE WS-CYS-DDD TO WS-PR-EFF-START-DDD.
+           MOVE WS-CYC-END-DDD TO WS-PR-EFF-END-DDD.
+           MOVE 'N' TO WS-PR-PART-MONTH-SW.
+           IF CI-INSTALL-YYDDD NOT = 0 AND
+                   WS-DC-INSTALL-DDD > WS-CYS-DDD AND
+                   WS-DC-INSTALL-DDD NOT > WS-CYC-END-DDD
+               MOVE WS-DC-INSTALL-DDD TO WS-PR-EFF-START-DDD
+               MOVE 'Y' TO WS-PR-PART-MONTH-SW.
+           IF CI-DISC-YYDDD NOT = 0 AND
+                   WS-DC-DISC-DDD NOT < WS-CYS-DDD AND
+                   WS-DC-DISC-DDD < WS-CYC-END-DDD
+               MOVE WS-DC-DISC-DDD TO WS-PR-EFF-END-DDD
+               MOVE 'Y' TO WS-PR-PART-MONTH-SW.
+           COMPUTE WS-PR-BILLABLE-DAYS =
+               WS-PR-EFF-END-DDD - WS-PR-EFF-START-DDD + 1.
+           IF WS-PR-BILLABLE-DAYS < 0
+               MOVE 0 TO WS-PR-BILLABLE-DAYS.
+           COMPUTE WS-PR-FACTOR ROUNDED =
+               WS-PR-BILLABLE-DAYS / WS-CYC-TOTAL-DAYS.
+           IF WS-PR-PART-MONTH
+               ADD 1 TO WS-MC-PART-MONTH-CNT.
+           COMPUTE WS-AM-FLAT-AMOUNT = WS-SEL-MRC-RATE * CD-SP-QTY.
+           COMPUTE WS-AM-PRORATED-AMOUNT ROUNDED =
+               WS-AM-FLAT-AMOUNT * WS-PR-FACTOR.
+       P2500-EXIT.
+           EXIT.
+      * P2600-APPLY-TERM-DISCOUNT - PLAIN TRUNCATING COMPUTE, NOT
+      * ROUNDED - PER THE 1992 TARIFF FILING FOR TERM DISCOUNTS.
+       P2600-APPLY-TERM-DISCOUNT.
+           MOVE 'N' TO WS-TS-FOUND-SW.
+           MOVE 0 TO WS-SEL-DISCOUNT-PCT.
+           PERFORM P2650-SEARCH-TERM-TIER THRU P2650-EXIT
+               VARYING WS-TD-X FROM 1 BY 1
+               UNTIL WS-TD-X > 4 OR WS-TS-FOUND.
+           COMPUTE WS-AM-DISCOUNTED-AMOUNT =
+               WS-AM-PRORATED-AMOUNT -
+               (WS-AM-PRORATED-AMOUNT * WS-SEL-DISCOUNT-PCT).
+       P2600-EXIT.
+           EXIT.
+       P2650-SEARCH-TERM-TIER.
+           IF CI-TERM-MONTHS = WS-TD-TERM-MONTHS (WS-TD-X)
+               MOVE WS-TD-DISCOUNT-PCT (WS-TD-X) TO WS-SEL-DISCOUNT-PCT
+               MOVE 'Y' TO WS-TS-FOUND-SW.
+       P2650-EXIT.
+           EXIT.
+      * P2700-APPLY-MPB-SPLIT - OUR SHARE ONLY WHEN CD-SP-MPB-IND IS
+      * 'Y'.  CD-SP-MPB-PCT WAS ALREADY RANGE-CHECKED IN P2750.
+       P2700-APPLY-MPB-SPLIT.
+           IF CD-SP-MPB-IND = 'Y'
+               COMPUTE WS-AM-MPB-AMOUNT ROUNDED =
+                   WS-AM-DISCOUNTED-AMOUNT * CD-SP-MPB-PCT
+               MOVE WS-AM-MPB-AMOUNT TO WS-AM-FINAL-AMOUNT
+               ADD 1 TO WS-MC-MPB-SPLIT-CNT
+           ELSE
+               MOVE WS-AM-DISCOUNTED-AMOUNT TO WS-AM-FINAL-AMOUNT.
+       P2700-EXIT.
+           EXIT.
+      * P2750-VALIDATE-MPB-PCT - A ZERO OR NEGATIVE OR GREATER-THAN-
+      * ONE SPLIT PERCENTAGE ON AN MPB-INDICATED RECORD IS BAD DATA.
+       P2750-VALIDATE-MPB-PCT.
+           MOVE 'Y' TO WS-MPB-VALID-SW.
+           IF CD-SP-MPB-IND = 'Y' AND
+                   (CD-SP-MPB-PCT NOT > 0 OR CD-SP-MPB-PCT > 1)
+               MOVE 'N' TO WS-MPB-VALID-SW.
+           IF NOT WS-MPB-VALID
+               MOVE 'N' TO WS-VALID-SW
+               MOVE EC-MPB-PCT-INVALID TO WS-CURRENT-ERR-CODE
+               ADD 1 TO WS-MC-MPB-INVALID.
+       P2750-EXIT.
+           EXIT.
+      * P2900-ROUND-AMOUNT - APPLIES RT-ROUND-RULE FROM THE RESOLVED
+      * RATE ROW, NOT A GLOBAL CONVENTION.  SAME GO TO ... DEPENDING
+      * ON DISPATCH IDIOM USED ACROSS THE RATING SUITE.
+       P2900-ROUND-AMOUNT.
+           MOVE WS-AM-FINAL-AMOUNT TO R4-RAW-AMT.
+           MOVE WS-SEL-ROUND-RULE TO R4-RULE.
+           MOVE WS-SEL-ROUND-POS TO R4-POS.
+           MOVE 1 TO WS-RD-RULE-INDEX.
+           IF R4-RULE = 'E'
+               MOVE 2 TO WS-RD-RULE-INDEX.
+           IF R4-RULE = 'T'
+               MOVE 3 TO WS-RD-RULE-INDEX.
+           IF R4-RULE = 'C'
+               MOVE 4 TO WS-RD-RULE-INDEX.
+           GO TO P2910-ROUND-UP P2920-ROUND-EVEN P2930-TRUNCATE
+               P2940-ROUND-CEILING DEPENDING ON WS-RD-RULE-INDEX.
+       P2910-ROUND-UP.
+           COMPUTE R4-ROUNDED-AMT ROUNDED = R4-RAW-AMT.
+           GO TO P2950-FINISH-ROUND.
+      *    THE 'E' (HALF-TO-EVEN) RULE HAS NEVER BEEN IMPLEMENTED
+      *    DIFFERENTLY FROM 'U' ACROSS THE WHOLE RATING SUITE.
+       P2920-ROUND-EVEN.
+           COMPUTE R4-ROUNDED-AMT ROUNDED = R4-RAW-AMT.
+           GO TO P2950-FINISH-ROUND.
+       P2930-TRUNCATE.
+           COMPUTE R4-ROUNDED-AMT = R4-RAW-AMT.
+           GO TO P2950-FINISH-ROUND.
+       P2940-ROUND-CEILING.
+           COMPUTE R4-ROUNDED-AMT = R4-RAW-AMT.
+           COMPUTE R4-RESIDUE = R4-RAW-AMT - R4-ROUNDED-AMT.
+           IF R4-RESIDUE > 0
+               ADD 0.01 TO R4-ROUNDED-AMT.
+       P2950-FINISH-ROUND.
+           MOVE R4-ROUNDED-AMT TO WS-AM-FINAL-AMOUNT.
+       P2900-EXIT.
+           EXIT.
+      * S350-OUTPUT SECTION - RATOUT PASS-THROUGH PLUS ONE BDTLOUT
+      * BILL DETAIL ELEMENT PER RATED CDR.
+       S350-OUTPUT SECTION.
+       P3000-WRITE-RATED-OUTPUT.
+           PERFORM P3100-WRITE-RATOUT THRU P3100-EXIT.
+           PERFORM P3200-WRITE-BILL-DETAIL THRU P3200-EXIT.
+           ADD 1 TO WS-WRITE-CNT.
+           CALL 'CABHASH' USING CD-OCN WS-HW-OCN.
+           ADD CD-SEQ-NBR TO WS-HW-SEQ.
+           ADD CD-SP-QTY TO WS-HW-MINUTES.
+           ADD WS-AM-FINAL-AMOUNT TO WS-HW-AMOUNT.
+       P3000-EXIT.
+           EXIT.
+       P3100-WRITE-RATOUT.
+           MOVE CD-OCN TO RO-OCN.
+           MOVE CD-BAN TO RO-BAN.
+           MOVE CD-SEQ-NBR TO RO-SEQ-NBR.
+           MOVE CD-SP-CIRCUIT-ID TO RO-CIRCUIT-ID.
+           MOVE CI-USOC TO RO-USOC.
+           MOVE 'R' TO RO-RATE-STATUS.
+           MOVE R1-CYCLE-YYDDD TO RO-CYCLE-YYDDD.
+           MOVE WS-RK-JURIS TO RO-JURIS-CD.
+           MOVE CI-STATE-CD TO RO-STATE-CD.
+           MOVE WS-PR-FACTOR TO RO-PRORATE-FACTOR.
+           MOVE WS-AM-FINAL-AMOUNT TO RO-TOT-AMOUNT.
+           MOVE SPACES TO RO-FILLER.
+           WRITE CABS-RATOUT-RECORD.
+       P3100-EXIT.
+           EXIT.
+       P3200-WRITE-BILL-DETAIL.
+           MOVE CD-BAN TO BD-BAN.
+           MOVE R1-BILL-PERIOD TO BD-BILL-PERIOD.
+           MOVE 'SP' TO BD-SECTION.
+           MOVE CD-SEQ-NBR TO BD-LINE-SEQ.
+           MOVE CD-OCN TO BD-OCN.
+           MOVE WS-RK-JURIS TO BD-JURIS-CD.
+           MOVE CI-STATE-CD TO BD-STATE-CD.
+           PERFORM P3210-BUILD-DESCRIPTION THRU P3210-EXIT.
+           MOVE WS-DESC-ASSEMBLED TO BD-DESCRIPTION.
+           MOVE CD-SP-QTY TO BD-TOT-MINUTES.
+           MOVE WS-AM-FINAL-AMOUNT TO BD-TOT-AMOUNT.
+           MOVE WS-AM-FINAL-AMOUNT TO BD-TOT-ROUNDED.
+           MOVE 0 TO BD-ROUND-DELTA.
+           MOVE 1 TO BD-ELEM-CNT.
+           SET BD-EX TO 1.
+           MOVE WS-RK-ELEM TO BD-EL-RATE-ELEM (BD-EX).
+           MOVE CD-SP-QTY TO BD-EL-QTY (BD-EX).
+           MOVE WS-SEL-MRC-RATE TO BD-EL-RATE (BD-EX).
+           MOVE WS-AM-FINAL-AMOUNT TO BD-EL-AMOUNT (BD-EX).
+           MOVE WS-SEL-ROUND-RULE TO BD-EL-ROUND-RULE (BD-EX).
+           MOVE WS-PGM-NAME TO BD-EL-SRC-PROCESS (BD-EX).
+           WRITE CABS-BILL-DETAIL.
+       P3200-EXIT.
+           EXIT.
+       P3210-BUILD-DESCRIPTION.
+           MOVE CI-USOC TO WS-DESC-USOC.
+           MOVE CI-TERM-MONTHS TO WS-DESC-TERM.
+           STRING 'SPECIAL ACCESS ' DELIMITED BY SIZE
+               WS-DESC-USOC DELIMITED BY SIZE
+               ' TERM ' DELIMITED BY SIZE
+               WS-DESC-TERM DELIMITED BY SIZE
+               ' MO' DELIMITED BY SIZE
+               INTO WS-DESC-ASSEMBLED.
+       P3210-EXIT.
+           EXIT.
+      * P3900-REJECT-TO-SUSPENSE - ANY FAILED CHECK LANDS HERE.
+       P3900-REJECT-TO-SUSPENSE.
+           MOVE WS-CURRENT-ERR-CODE TO FD-SU-ERR-CODE.
+           MOVE 'E' TO FD-SU-ERR-SEVERITY.
+           MOVE WS-PGM-NAME TO FD-SU-DETECT-PGM.
+           MOVE 'P2000-PROCESS' TO FD-SU-DETECT-PARA.
+           MOVE R1-RUN-ID TO FD-SU-RUN-ID.
+           MOVE CABS-CDR-RECORD TO FD-SU-ORIG-RECORD.
+           MOVE SPACES TO FD-SU-FILLER.
+           CALL 'CABERRWR' USING FD-SU-ERR-CODE FD-SU-DETECT-PGM
+               FD-SU-RUN-ID WS-RC-ERRWR.
+           WRITE CABS-SUSPENSE-RECORD-FD.
+           ADD 1 TO WS-REJECT-CNT.
+       P3900-EXIT.
+           EXIT.
+      * S800-CONTROL-BALANCE SECTION.
+       S800-CONTROL-BALANCE SECTION.
+       P8000-CONTROL.
+           PERFORM P8010-PRINT-REPORT THRU P8010-EXIT.
+           PERFORM P8100-BUILD-CONTROL-REC THRU P8100-EXIT.
+           PERFORM P8200-CHECK-BALANCE THRU P8200-EXIT.
+           PERFORM P8300-WRITE-CONTROL-REC THRU P8300-EXIT.
+       P8000-EXIT.
+           EXIT.
+       P8010-PRINT-REPORT.
+           ADD 1 TO WS-RPT-PAGE-NBR.
+           MOVE SPACES TO CABS-PRINT-LINE.
+           MOVE '1' TO PC-CC.
+           MOVE WS-RPT-TITLE1 TO PC-TEXT.
+           WRITE CABS-PRINT-LINE.
+           MOVE SPACES TO CABS-PRINT-LINE.
+           WRITE CABS-PRINT-LINE.
+           MOVE SPACES TO CABS-PRINT-LINE.
+           MOVE ' ' TO PC-CC.
+           MOVE 'READ' TO PC-COL-001-020.
+           MOVE WS-READ-CNT TO PC-COL-021-060.
+           WRITE CABS-PRINT-LINE.
+           MOVE SPACES TO CABS-PRINT-LINE.
+           MOVE ' ' TO PC-CC.
+           MOVE 'WRITTEN' TO PC-COL-001-020.
+           MOVE WS-WRITE-CNT TO PC-COL-021-060.
+           WRITE CABS-PRINT-LINE.
+           MOVE SPACES TO CABS-PRINT-LINE.
+           MOVE ' ' TO PC-CC.
+           MOVE 'REJECTED' TO PC-COL-001-020.
+           MOVE WS-REJECT-CNT TO PC-COL-021-060.
+           WRITE CABS-PRINT-LINE.
+           MOVE SPACES TO CABS-PRINT-LINE.
+           MOVE ' ' TO PC-CC.
+           MOVE 'CIRCUIT NOT FOUND' TO PC-COL-001-020.
+           MOVE WS-MC-CIRCUIT-NOT-FOUND TO PC-COL-021-060.
+           WRITE CABS-PRINT-LINE.
+           MOVE SPACES TO CABS-PRINT-LINE.
+           MOVE ' ' TO PC-CC.
+           MOVE 'RATE NOT FOUND' TO PC-COL-001-020.
+           MOVE WS-MC-RATE-NOT-FOUND TO PC-COL-021-060.
+           WRITE CABS-PRINT-LINE.
+           MOVE SPACES TO CABS-PRINT-LINE.
+           MOVE ' ' TO PC-CC.
+           MOVE 'MPB PERCENTAGE INVALID' TO PC-COL-001-020.
+           MOVE WS-MC-MPB-INVALID TO PC-COL-021-060.
+           WRITE CABS-PRINT-LINE.
+           MOVE SPACES TO CABS-PRINT-LINE.
+           MOVE ' ' TO PC-CC.
+           MOVE 'TERM EXPIRED' TO PC-COL-001-020.
+           MOVE WS-MC-TERM-EXPIRED TO PC-COL-021-060.
+           WRITE CABS-PRINT-LINE.
+       P8010-EXIT.
+           EXIT.
+       P8100-BUILD-CONTROL-REC.
+           MOVE R1-RUN-ID TO CT-RUN-ID.
+           MOVE WS-PGM-NAME TO CT-PROCESS-ID.
+           MOVE 1 TO CT-STEP-SEQ.
+           MOVE R1-CYCLE-YYDDD TO CT-CYCLE-YYDDD.
+           MOVE R1-BILL-PERIOD TO CT-BILL-PERIOD.
+           MOVE 0 TO CT-RERUN-NBR.
+           MOVE SPACES TO CT-JOBNAME.
+           MOVE SPACES TO CT-STEPNAME.
+           MOVE WS-READ-CNT TO CT-READ.
+           MOVE WS-WRITE-CNT TO CT-WRITTEN.
+           MOVE WS-REJECT-CNT TO CT-REJECTED.
+           MOVE 0 TO CT-SUMMARISED.
+           MOVE 0 TO CT-CARRIED-FWD.
+           MOVE WS-HW-MINUTES TO CT-HASH-MINUTES.
+           MOVE WS-HW-AMOUNT TO CT-HASH-AMOUNT.
+           MOVE WS-HW-SEQ TO CT-HASH-SEQ.
+           MOVE WS-HW-OCN TO CT-HASH-OCN.
+           MOVE SPACES TO CT-RESTART-KEY.
+           MOVE SPACES TO CT-FILLER.
+           MOVE 0 TO CT-RC.
+           MOVE SPACES TO CT-ABEND-CD.
+       P8100-EXIT.
+           EXIT.
+       P8200-CHECK-BALANCE.
+           IF CT-READ = CT-WRITTEN + CT-REJECTED + CT-SUMMARISED +
+                   CT-CARRIED-FWD
+               MOVE 'B' TO CT-BAL-IND
+           ELSE
+               MOVE 'O' TO CT-BAL-IND.
+       P8200-EXIT.
+           EXIT.
+       P8300-WRITE-CONTROL-REC.
+           MOVE CABS-CONTROL-RECORD TO CABS-CTLOUT-RECORD.
+           WRITE CABS-CTLOUT-RECORD.
+       P8300-EXIT.
+           EXIT.
+      * S900-TERMINATION SECTION.
+       S900-TERMINATION SECTION.
+       P9000-TERM.
+           CLOSE SPCIN.
+           CLOSE RATEMST.
+           CLOSE RATOUT.
+           CLOSE BDTLOUT.
+           CLOSE SUSOUT.
+           CLOSE CTLOUT.
+           CLOSE RPTOUT.
+           DISPLAY 'CABRAT04 - RUN COMPLETE'.
+           DISPLAY '  READ        = ' WS-READ-CNT.
+           DISPLAY '  WRITTEN     = ' WS-WRITE-CNT.
+           DISPLAY '  REJECTED    = ' WS-REJECT-CNT.
+           DISPLAY '  PART-MONTH  = ' WS-MC-PART-MONTH-CNT.
+           DISPLAY '  MPB SPLITS  = ' WS-MC-MPB-SPLIT-CNT.
+       P9000-EXIT.
+           EXIT.

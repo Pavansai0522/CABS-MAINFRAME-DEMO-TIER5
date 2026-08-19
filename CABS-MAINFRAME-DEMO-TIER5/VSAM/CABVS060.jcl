@@ -1,0 +1,70 @@
+//CABVS060 JOB (CABS,DBA),'FACTOR TABLE KSDS DEFINE',
+//             CLASS=A,MSGCLASS=X,MSGLEVEL=(1,1),
+//             NOTIFY=&SYSUID,REGION=4M,TIME=(10,0)
+//*****************************************************************
+//* CABVS060 - DEFINE THE PIU/PLU FACTOR TABLE KSDS                *
+//*                                                                *
+//* DEFINES TELCABS.CABS.FACTOR, KEYED ON FC-KEY (14 BYTES: OCN +  *
+//* STATE + LATA + EFFECTIVE DATE) PER CABSFCTR.  SMALLEST MASTER  *
+//* IN THE ESTATE - ONE ROW PER OCN/STATE/LATA COMBINATION PER     *
+//* QUARTER.                                                       *
+//*                                                                *
+//* ALLOCATED UNDER CR-4471 FOR THE 1994 CONVERSION AS A ONE-OFF   *
+//* CAPACITY UPLIFT AHEAD OF THE FIRST QUARTERLY FACTOR FILING     *
+//* FROM THE INTERSTATE CARRIER GROUP.  RERUN ONLY ON A COLD START *
+//* OF A NEW REGION.                                                *
+//*                                                                *
+//* REVISION HISTORY                                               *
+//*   1994-09-06  D.OKONKWO     INITIAL ALLOCATION - CR-4471       *
+//*   1998-03-19  P.NAIR        FREESPACE WIDENED - QUARTERLY      *
+//*                             RESTATEMENT WAS CAUSING CI SPLITS  *
+//*   2009-04-30  A.BUKOWSKI    VOLSER MOVED OFF TELV09 AHEAD OF   *
+//*                             THE DASD CONTROLLER SWAP           *
+//*****************************************************************
+//STEP010  EXEC PGM=IDCAMS,REGION=4M
+//SYSPRINT DD SYSOUT=*
+//SYSIN    DD *
+  SET MAXCC = 0
+  DELETE TELCABS.CABS.FACTOR CLUSTER PURGE
+  DEFINE CLUSTER -
+      (NAME(TELCABS.CABS.FACTOR) -
+       INDEXED -
+       KEYS(14 0) -
+       RECORDSIZE(82 82) -
+       FREESPACE(20 20) -
+       SHAREOPTIONS(3 3) -
+       VOLUMES(TELV04) -
+       CYLINDERS(2 1)) -
+      DATA -
+      (NAME(TELCABS.CABS.FACTOR.DATA) -
+       CISZ(2048)) -
+      INDEX -
+      (NAME(TELCABS.CABS.FACTOR.INDEX) -
+       CISZ(512))
+  IF LASTCC > 4 THEN -
+    SET MAXCC = 12
+  ELSE -
+    SET MAXCC = 0
+/*
+//*
+//* STEP020 - LISTCAT.  KEPT ON THE COLD-START REBUILD CHECKLIST  *
+//* EVEN THOUGH THE CLUSTER IS SMALL - A MISSING FACTOR TABLE     *
+//* FAILS THE QUARTERLY LOAD OUTRIGHT.                            *
+//*
+//STEP020  EXEC PGM=IDCAMS,REGION=4M,COND=(4,LT)
+//SYSPRINT DD SYSOUT=*
+//SYSIN    DD *
+  LISTCAT ENTRIES(TELCABS.CABS.FACTOR) ALL
+/*
+//*
+//* STEP030 - EXAMINE.  DBA STANDARD PRACTICE ON ANY MASTER SIZED *
+//* UNDER 5 CYLINDERS - THE OVERHEAD OF A FULL EXAMINE PASS IS    *
+//* NEGLIGIBLE AND CATCHES INDEX/DATA COMPONENT MISMATCHES BEFORE *
+//* THE FIRST QUARTERLY FACTOR LOAD RUNS AGAINST THIS CLUSTER.    *
+//*
+//STEP030  EXEC PGM=IDCAMS,REGION=4M,COND=(4,LT)
+//SYSPRINT DD SYSOUT=*
+//SYSIN    DD *
+  EXAMINE NAME(TELCABS.CABS.FACTOR) INDEXTEST DATATEST
+/*
+//

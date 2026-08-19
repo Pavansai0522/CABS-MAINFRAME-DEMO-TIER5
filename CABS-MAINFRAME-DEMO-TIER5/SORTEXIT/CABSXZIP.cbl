@@ -1,0 +1,265 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CABSXZIP.
+      *****************************************************************
+      * CABSXZIP - SORT E15 INPUT EXIT - PRINT STREAM ZIP PREFIX      *
+      * APPLICATION : CABS                                            *
+      * COMPILER    : ENTERPRISE COBOL                                *
+      * INVOKED BY  : OS SORT/MERGE, MODS E15=(CABSXZIP,4096,         *
+      *               SORTEXIT,N) ON CONTROL CARD MEMBER              *
+      *               JCL/CTLCARDS/CABSRT12                           *
+      * INPUTS      : ONE 133 BYTE PRINT LINE PER ENTRY, ASA          *
+      *               CARRIAGE CONTROL IN BYTE 1                      *
+      * OUTPUTS     : THE SAME LINE WITH BYTES 1 THROUGH 20 REPLACED  *
+      *               BY THE SORT PREFIX                              *
+      * CONTROL     : NONE - EXITS DO NOT WRITE CTLOUT, CABS-STD-041  *
+      * BALANCE     : SORTIN = RECORDS RETURNED - NOTHING IS DROPPED  *
+      * RESTART     : NOT RESTARTABLE - RERUN THE WHOLE SORT STEP     *
+      *                                                               *
+      * LINKAGE CONVENTION                                            *
+      *   SORT PASSES REGISTER 1 POINTING AT A TWO WORD PARAMETER     *
+      *   LIST.  WORD ONE IS THE ADDRESS OF THE INPUT RECORD, OR      *
+      *   BINARY ZERO WHEN SORTIN IS EXHAUSTED.  WORD TWO ADDRESSES   *
+      *   THE LENGTH HALFWORD AND IS NOT REFERENCED - THE PRINT       *
+      *   STREAM IS FIXED AT 133.  THE REPLY GOES IN RETURN-CODE -    *
+      *     00  NO ACTION - SORT TAKES THE RECORD UNCHANGED           *
+      *     04  DELETE THE RECORD                                     *
+      *     08  RETURN THE ALTERED RECORD ADDRESSED BY WORD ONE       *
+      *     12  DO NOT ENTER THIS EXIT AGAIN                          *
+      *     16  TERMINATE THE SORT                                    *
+      *   WORKING STORAGE PERSISTS FOR THE LIFE OF THE SORT STEP.     *
+      *   THE ZIP OF THE DOCUMENT IN HAND AND THE TWO ORDINALS ARE    *
+      *   HELD THERE AND CARRY FROM ONE ENTRY TO THE NEXT.            *
+      *                                                               *
+      * WHAT THE PREFIX IS FOR                                        *
+      *   THE CARD SORTS ON 1,20 ONLY.  THE ZIP APPEARS ON THE        *
+      *   INVOICE HEADER LINE AND ON NO OTHER LINE OF THE DOCUMENT,   *
+      *   SO A SORT ON THE PRINT LINE AS IT STANDS WOULD SCATTER      *
+      *   THE LINES OF ONE INVOICE ACROSS THE WHOLE FILE.  THIS EXIT  *
+      *   BUILDS A TWENTY BYTE KEY OUT OF THE ZIP, A DOCUMENT         *
+      *   ORDINAL AND A LINE ORDINAL AND LAYS IT OVER BYTES 1 TO 20   *
+      *   OF EVERY LINE.  THE ZIP GROUPS THE MAIL, THE DOCUMENT       *
+      *   ORDINAL HOLDS AN INVOICE TOGETHER AND THE LINE ORDINAL      *
+      *   HOLDS THE LINES OF IT IN THE ORDER THE FORMATTER WROTE      *
+      *   THEM.  CABSXBST TAKES THE PREFIX OFF AGAIN ON THE WAY OUT.  *
+      *                                                               *
+      * THE DISPLACED TWENTY BYTES                                    *
+      *   THERE IS NOWHERE IN A 133 BYTE LINE TO PUT THE BYTES THE    *
+      *   PREFIX COVERS.  BYTE 1 IS THE CARRIAGE CONTROL AND IT IS    *
+      *   CARRIED IN THE LAST POSITION OF THE PREFIX.  BYTES 2        *
+      *   THROUGH 20 ARE THE LEADING BLANKS OF THE PRINT LINE, WHICH  *
+      *   THE FORMAT FAMILY EMITS ON EVERY LINE OF EVERY DOCUMENT.    *
+      *   THAT IS THE ASSUMPTION THE 1994 DESIGN RESTS ON AND IT IS   *
+      *   WHY THE PREFIX IS TWENTY BYTES AND NOT MORE.                *
+      *                                                               *
+      * REVISION HISTORY                                              *
+      *   V1.00  1994-03-22  R.T.WHEELER   INITIAL - ASSEMBLER F      *
+      *   V1.02  1997-08-06  D.OKONKWO     PLUS FOUR ADDED TO KEY     *
+      *   V1.05  2002-01-15  J.CALLAGHAN   CARRY FORWARD ON A BLANK   *
+      *   V2.00  2006-11-27  P.NAIR        RECODED IN COBOL FOR LE    *
+      *   V2.02  2011-05-19  E.KOWALCZYK   LINE ORDINAL HELD AT 9999  *
+      *   V2.04  2017-10-02  M.HAAS        RECOMPILE ONLY - LE V6.2   *
+      *****************************************************************
+       ENVIRONMENT DIVISION.
+       CONFIGURATION SECTION.
+       SOURCE-COMPUTER. IBM-370.
+       OBJECT-COMPUTER. IBM-370.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+      *
+      * THE MODULE IS LOADED ONCE AND ENTERED ONCE PER PRINT LINE.
+      * EVERYTHING BELOW ACCUMULATES ACROSS ENTRIES.
+       01  WS-MODULE-IDENT.
+           05  FILLER                  PIC X(08) VALUE 'CABSXZIP'.
+           05  FILLER                  PIC X(08) VALUE ' V2.04  '.
+       01  WS-SWITCHES.
+           05  WS-FIRST-ENTRY-SW       PIC X(01) VALUE 'Y'.
+               88  WS-FIRST-ENTRY      VALUE 'Y'.
+           05  WS-DOC-OPEN-SW          PIC X(01) VALUE 'N'.
+               88  WS-DOC-OPEN         VALUE 'Y'.
+           05  WS-ZIP-EVER-SW          PIC X(01) VALUE 'N'.
+               88  WS-ZIP-EVER-SEEN    VALUE 'Y'.
+       01  WS-COUNTERS.
+           05  WS-ENTRY-CNT            PIC S9(11) COMP-3 VALUE 0.
+           05  WS-DOC-CNT              PIC S9(09) COMP-3 VALUE 0.
+           05  WS-PREFIX-CNT           PIC S9(11) COMP-3 VALUE 0.
+           05  WS-ZIP-GOOD-CNT         PIC S9(09) COMP-3 VALUE 0.
+           05  WS-ZIP-MISSING-CNT      PIC S9(09) COMP-3 VALUE 0.
+           05  WS-ZIP-CARRIED-CNT      PIC S9(09) COMP-3 VALUE 0.
+           05  WS-ORPHAN-CNT           PIC S9(09) COMP-3 VALUE 0.
+           05  WS-LINE-CAP-CNT         PIC S9(09) COMP-3 VALUE 0.
+      *
+      * THE DOCUMENT IN HAND.  THE DOCUMENT ORDINAL IS SIX DIGITS,
+      * WHICH COVERS THE LARGEST CYCLE THE FORMAT FAMILY HAS CUT.
+      * IT IS HELD AT ITS MAXIMUM RATHER THAN WRAPPED.
+       01  WS-DOCUMENT-STATE.
+           05  WS-DOC-ORD              PIC 9(06) VALUE 0.
+           05  WS-DOC-ORD-LIMIT        PIC 9(06) VALUE 999999.
+           05  WS-LINE-ORD             PIC 9(04) VALUE 0.
+           05  WS-LINE-ORD-LIMIT       PIC 9(04) VALUE 9999.
+           05  WS-CUR-ZIP5             PIC X(05) VALUE '00000'.
+           05  WS-CUR-ZIP4             PIC X(04) VALUE '0000'.
+           05  WS-HOLD-CC              PIC X(01) VALUE SPACE.
+      *
+      * THE ZIP WINDOW.  THE FORMAT FAMILY PUTS THE FULL NINE
+      * CHARACTER ZIP AT 105 ON THE HEADER LINE OF EVERY INVOICE.
+       01  WS-ZIP-WINDOW.
+           05  WS-ZW-BASE              PIC X(05) VALUE SPACES.
+           05  WS-ZW-PLUS4             PIC X(04) VALUE SPACES.
+      *
+       LINKAGE SECTION.
+       01  LK-PARM-LIST.
+           05  LK-RECORD-PTR           POINTER.
+           05  LK-LENGTH-PTR           POINTER.
+      *
+      * TWO VIEWS OF THE SAME 133 BYTES.  LK-PRINT-RAW IS THE LINE
+      * AS THE FORMATTER WROTE IT AND IS READ FIRST.  LK-PRINT-KEY
+      * IS THE SAME STORAGE AFTER THE PREFIX HAS BEEN LAID DOWN AND
+      * IS ONLY WRITTEN TO.  BOTH ARE SET TO WORD ONE.
+       01  LK-PRINT-RAW.
+           05  LK-PR-CTL-CHAR          PIC X(01).
+               88  LK-PR-TOP-OF-FORM   VALUE '1' '7'.
+               88  LK-PR-COMPLETE      VALUE '7'.
+           05  LK-PR-LEAD-BLANKS       PIC X(19).
+           05  LK-PR-BODY              PIC X(84).
+           05  LK-PR-ZIP-WINDOW        PIC X(09).
+           05  LK-PR-TAIL              PIC X(20).
+       01  LK-PRINT-KEY.
+           05  LK-PK-PREFIX.
+               10  LK-PK-ZIP5          PIC X(05).
+               10  LK-PK-ZIP4          PIC X(04).
+               10  LK-PK-DOC-ORD       PIC 9(06).
+               10  LK-PK-LINE-ORD      PIC 9(04).
+               10  LK-PK-CTL-CHAR      PIC X(01).
+           05  LK-PK-TEXT              PIC X(113).
+      *
+       PROCEDURE DIVISION USING LK-PARM-LIST.
+       P0000-MAINLINE.
+           MOVE ZERO TO RETURN-CODE.
+           IF WS-FIRST-ENTRY
+               PERFORM P1000-INIT THRU P1000-EXIT
+           END-IF.
+           IF LK-RECORD-PTR = NULL
+               PERFORM P8000-END-OF-INPUT THRU P8000-EXIT
+               GOBACK
+           END-IF.
+           SET ADDRESS OF LK-PRINT-RAW TO LK-RECORD-PTR.
+           SET ADDRESS OF LK-PRINT-KEY TO LK-RECORD-PTR.
+           ADD 1 TO WS-ENTRY-CNT.
+           PERFORM P2000-TEST-BOUNDARY THRU P2000-EXIT.
+           PERFORM P3000-BUILD-PREFIX THRU P3000-EXIT.
+           MOVE 8 TO RETURN-CODE.
+           GOBACK.
+
+       P1000-INIT.
+           MOVE 'N' TO WS-FIRST-ENTRY-SW.
+           DISPLAY 'CABSXZIP ENTERED - PRINT STREAM ZIP PREFIX'.
+
+       P1000-EXIT.
+           EXIT.
+
+       P2000-TEST-BOUNDARY.
+      * A DOCUMENT STARTS ON A LINE THAT CARRIES A TOP OF FORM
+      * CARRIAGE CONTROL.  THE FORMAT FAMILY WRITES A 7 ON AN
+      * INVOICE IT HAS COMPLETED AND A 1 ON ONE IT HAS NOT, AND
+      * BOTH ARE TREATED HERE AS THE START OF A DOCUMENT.  THE
+      * DIFFERENCE BETWEEN THEM IS ACTED ON BY CABSXBST ON THE WAY
+      * OUT OF THE MERGE, WHICH IS WHY THE CARRIAGE CONTROL BYTE IS
+      * CARRIED IN THE PREFIX AND NOT SIMPLY OVERWRITTEN.
+           IF LK-PR-TOP-OF-FORM
+               PERFORM P2400-OPEN-DOCUMENT THRU P2400-EXIT
+               GO TO P2000-EXIT
+           END-IF.
+      * A LINE THAT ARRIVES BEFORE ANY TOP OF FORM HAS BEEN SEEN
+      * BELONGS TO A DOCUMENT WHOSE HEADER IS NOT IN THIS FILE.
+      * IT IS OPENED AS DOCUMENT ONE AND KEPT.
+           IF NOT WS-DOC-OPEN
+               ADD 1 TO WS-ORPHAN-CNT
+               PERFORM P2400-OPEN-DOCUMENT THRU P2400-EXIT
+           END-IF.
+
+       P2000-EXIT.
+           EXIT.
+
+       P2400-OPEN-DOCUMENT.
+           IF WS-DOC-ORD < WS-DOC-ORD-LIMIT
+               ADD 1 TO WS-DOC-ORD
+           END-IF.
+           MOVE ZERO TO WS-LINE-ORD.
+           MOVE 'Y' TO WS-DOC-OPEN-SW.
+           ADD 1 TO WS-DOC-CNT.
+           PERFORM P2600-PULL-ZIP THRU P2600-EXIT.
+
+       P2400-EXIT.
+           EXIT.
+
+       P2600-PULL-ZIP.
+      * TAKE THE ZIP OFF THE HEADER LINE.  THE FIVE DIGIT BASE MUST
+      * BE NUMERIC AND MUST NOT BE ALL ZEROS.  THE PLUS FOUR IS
+      * OPTIONAL AND IS ZERO FILLED WHEN IT IS NOT THERE, WHICH
+      * KEEPS THE NINE CHARACTER KEY THE SAME WIDTH ON EVERY LINE.
+           MOVE LK-PR-ZIP-WINDOW TO WS-ZIP-WINDOW.
+           IF WS-ZW-BASE IS NUMERIC AND WS-ZW-BASE NOT = '00000'
+               MOVE WS-ZW-BASE TO WS-CUR-ZIP5
+               IF WS-ZW-PLUS4 IS NUMERIC
+                   MOVE WS-ZW-PLUS4 TO WS-CUR-ZIP4
+               ELSE
+                   MOVE '0000' TO WS-CUR-ZIP4
+               END-IF
+               MOVE 'Y' TO WS-ZIP-EVER-SW
+               ADD 1 TO WS-ZIP-GOOD-CNT
+               GO TO P2600-EXIT
+           END-IF.
+      * NO READABLE ZIP ON THE HEADER.  THE ZIP OF THE DOCUMENT
+      * BEFORE IT IS USED, WHICH PUTS THE INVOICE IN THE SAME MAIL
+      * TRAY AS ITS NEIGHBOUR.  THE VERY FIRST DOCUMENT OF A RUN
+      * HAS NO NEIGHBOUR TO BORROW FROM, SO IT IS GIVEN 00000 AND
+      * SORTS TO THE FRONT OF THE STREAM.
+           ADD 1 TO WS-ZIP-MISSING-CNT.
+           IF WS-ZIP-EVER-SEEN
+               ADD 1 TO WS-ZIP-CARRIED-CNT
+           ELSE
+               MOVE '00000' TO WS-CUR-ZIP5
+               MOVE '0000'  TO WS-CUR-ZIP4
+           END-IF.
+
+       P2600-EXIT.
+           EXIT.
+
+       P3000-BUILD-PREFIX.
+      * STEP THE LINE ORDINAL AND LAY THE KEY DOWN.  THE CARRIAGE
+      * CONTROL IS TAKEN OUT OF BYTE 1 BEFORE ANYTHING IS WRITTEN
+      * OVER IT, BECAUSE THE TWO VIEWS ADDRESS THE SAME STORAGE.
+           MOVE LK-PR-CTL-CHAR TO WS-HOLD-CC.
+           IF WS-LINE-ORD < WS-LINE-ORD-LIMIT
+               ADD 1 TO WS-LINE-ORD
+           ELSE
+               ADD 1 TO WS-LINE-CAP-CNT
+           END-IF.
+           MOVE WS-CUR-ZIP5 TO LK-PK-ZIP5.
+           MOVE WS-CUR-ZIP4 TO LK-PK-ZIP4.
+           MOVE WS-DOC-ORD  TO LK-PK-DOC-ORD.
+           MOVE WS-LINE-ORD TO LK-PK-LINE-ORD.
+           MOVE WS-HOLD-CC  TO LK-PK-CTL-CHAR.
+           ADD 1 TO WS-PREFIX-CNT.
+
+       P3000-EXIT.
+           EXIT.
+
+       P8000-END-OF-INPUT.
+      * A NULL RECORD ADDRESS MEANS SORTIN IS EXHAUSTED.  NOTHING
+      * IS INSERTED HERE, SO THE REPLY IS ZERO AND THE TALLIES GO
+      * TO THE MESSAGE DATA SET.  THE ZIP CARRIED FORWARD COUNT IS
+      * THE ONLY PLACE THE RUN RECORDS THAT AN INVOICE WAS MAILED
+      * TO THE TRAY OF THE DOCUMENT AHEAD OF IT.
+           DISPLAY 'CABSXZIP ENTRIES     ' WS-ENTRY-CNT.
+           DISPLAY 'CABSXZIP DOCUMENTS   ' WS-DOC-CNT.
+           DISPLAY 'CABSXZIP LINES KEYED ' WS-PREFIX-CNT.
+           DISPLAY 'CABSXZIP ZIP TAKEN   ' WS-ZIP-GOOD-CNT.
+           DISPLAY 'CABSXZIP ZIP MISSING ' WS-ZIP-MISSING-CNT.
+           DISPLAY 'CABSXZIP ZIP CARRIED ' WS-ZIP-CARRIED-CNT.
+           DISPLAY 'CABSXZIP NO HEADER   ' WS-ORPHAN-CNT.
+           DISPLAY 'CABSXZIP LINE AT MAX ' WS-LINE-CAP-CNT.
+           MOVE ZERO TO RETURN-CODE.
+
+       P8000-EXIT.
+           EXIT.

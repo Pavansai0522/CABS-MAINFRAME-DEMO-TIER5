@@ -1,0 +1,62 @@
+//CABVS050 JOB (CABS,DBA),'RATE TABLE KSDS DEFINE',
+//             CLASS=A,MSGCLASS=X,MSGLEVEL=(1,1),
+//             NOTIFY=&SYSUID,REGION=4M,TIME=(10,0)
+//*****************************************************************
+//* CABVS050 - DEFINE THE ACCESS RATE TABLE KSDS                  *
+//*                                                               *
+//* DEFINES TELCABS.CABS.RATE, KEYED ON RT-KEY (18 BYTES: TARIFF  *
+//* CODE + RATE ELEMENT + JURISDICTION + STATE + EFFECTIVE DATE)  *
+//* PER CABSRATE.  RECORDSIZE IS SIZED TO THE FULL RT-BAND-TABLE  *
+//* (UP TO 24 OCCURRENCES) PER CABS-STD-031 - A RATE ROW CARRYING *
+//* A FULL BAND SET RUNS WELL PAST THE OLD FIXED 120-BYTE LAYOUT. *
+//* THE BULK PROVISIONING JOB (CABGDGDF) STILL DEFINES THIS       *
+//* CLUSTER AT THE PRE-1996 FIXED SIZE - THAT COPY PREDATES THE   *
+//* BAND TABLE AND HAS NOT BEEN RECONCILED WITH THIS ONE.         *
+//*                                                               *
+//* REVISION HISTORY                                              *
+//*   1989-01-20  R.T.WHEELER   INITIAL DEFINITION - FIXED 120    *
+//*                             BYTE RECORD, NO BAND SUPPORT       *
+//*   1996-04-02  J.M.CASTILLO  RECORDSIZE WIDENED FOR THE NEW     *
+//*                             RT-BAND-TABLE ODO STRUCTURE        *
+//*   2001-11-06  P.NAIR        MAX BAND COUNT RAISED FROM 12 TO   *
+//*                             24 FOR THE DATA SERVICE TARIFF     *
+//*   2015-02-18  L.FERREIRA    CISZ RAISED TO 8192 - BAND-HEAVY   *
+//*                             ROWS WERE SPANNING CONTROL         *
+//*                             INTERVALS UNDER THE OLD SIZE       *
+//*****************************************************************
+//STEP010  EXEC PGM=IDCAMS,REGION=4M
+//SYSPRINT DD SYSOUT=*
+//SYSIN    DD *
+  SET MAXCC = 0
+  DELETE TELCABS.CABS.RATE CLUSTER PURGE
+  DEFINE CLUSTER -
+      (NAME(TELCABS.CABS.RATE) -
+       INDEXED -
+       KEYS(18 0) -
+       RECORDSIZE(67 619) -
+       FREESPACE(15 20) -
+       SHAREOPTIONS(2 3) -
+       VOLUMES(TELV03) -
+       CYLINDERS(25 15)) -
+      DATA -
+      (NAME(TELCABS.CABS.RATE.DATA) -
+       CISZ(8192)) -
+      INDEX -
+      (NAME(TELCABS.CABS.RATE.INDEX) -
+       CISZ(2048))
+  IF LASTCC > 4 THEN -
+    SET MAXCC = 12
+  ELSE -
+    SET MAXCC = 0
+/*
+//*
+//* STEP020 - LISTCAT VERIFICATION.  COMPARE RECORDSIZE HERE      *
+//* AGAINST THE CABGDGDF COPY IF RATE LOADS START FAILING WITH    *
+//* AN INVALID RECORD LENGTH AFTER A COLD-START REBUILD.          *
+//*
+//STEP020  EXEC PGM=IDCAMS,REGION=4M,COND=(4,LT)
+//SYSPRINT DD SYSOUT=*
+//SYSIN    DD *
+  LISTCAT ENTRIES(TELCABS.CABS.RATE) ALL
+/*
+//

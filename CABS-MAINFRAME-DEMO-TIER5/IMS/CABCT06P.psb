@@ -1,0 +1,22 @@
+*****************************************************************
+* CABCT06P - PSB FOR CABCT06 (COUNTERPARTY RECONCILIATION READ) *
+* SENSITIVE TO ALL THREE CABSETDB SEGMENTS, PROCESSED VIA THE   *
+* SECONDARY INDEX (CABSETSX) SO GN PROCESSING RETURNS ROOTS IN  *
+* COUNTERPARTY OCN / SETTLE PERIOD ORDER INSTEAD OF HDAM ROOT   *
+* LOAD ORDER.  READ-ONLY - PROCOPT=G.                            *
+* REVISION HISTORY                                              *
+*   V1.00  1995-11-27  L.FENNIMORE INITIAL GEN, PAIRED WITH      *
+*                                  CABSETSX V1.00                *
+*   V1.01  2009-10-05  D.WASILEWSKI RECOMPILE AFTER CABSETSX     *
+*                                  REBUILD                        *
+*****************************************************************
+         PRINT NOGEN
+*
+         PCB   TYPE=DB,DBDNAME=CABSETDB,PROCSEQ=CABSETSX,             X
+               KEYLEN=29,PROCOPT=G
+         SENSEG NAME=SETLSEG,PARENT=0
+         SENSEG NAME=SETLDTL,PARENT=SETLSEG
+         SENSEG NAME=SETLDISP,PARENT=SETLSEG
+*
+         PSBGEN LANG=COBOL,PSBNAME=CABCT06P,CMPAT=YES
+         END

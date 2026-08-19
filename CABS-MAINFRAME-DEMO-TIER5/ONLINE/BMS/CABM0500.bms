@@ -1,0 +1,98 @@
+*****************************************************************
+* CABM0500 - DISPUTE ENTRY MAPSET FOR CAB4 (CABONL05).          *
+* WRITES TO TELCABS.CABS.DISPUTE.  SETTLEMENT POSITION DISPLAY  *
+* IS POPULATED FROM A LINK TO CABONL06 (CAB5), NOT FROM A       *
+* DIRECT READ - SEE CABONL05 P5000-GET-SETTLEMENT-POS.          *
+* 2004 VINTAGE - THE FIRST MAPSET BUILT UNDER THE COLOR TERM    *
+* STANDARD, CABS-STD-021 REV 3.                                 *
+*                                                                 *
+* REVISION HISTORY                                                *
+*   V1.00  2004-05-14  S.OKONKWO    INITIAL - BUILT WITH THE     *
+*                                   DISPUTE TRACKING INITIATIVE  *
+*   V1.01  2009-01-22  S.OKONKWO    AUTO-CREDIT CONFIRM FIELD    *
+*                                   ADDED UNDER CR-2291           *
+*****************************************************************
+         PRINT NOGEN
+CABM05   DFHMSD TYPE=&SYSPARM,MODE=INOUT,LANG=COBOL,STORAGE=AUTO,     X
+               TIOAPFX=YES,CTRL=(FREEKB,FRSET),EXTATT=YES
+*
+DISPMAP  DFHMDI SIZE=(24,80),LINE=1,COLUMN=1
+*
+         DFHMDF POS=(1,1),LENGTH=4,ATTRB=(ASKIP,NORM),               X
+               COLOR=BLUE,INITIAL='CAB4'
+         DFHMDF POS=(1,10),LENGTH=20,ATTRB=(ASKIP,NORM),             X
+               COLOR=BLUE,INITIAL='DISPUTE ENTRY'
+CDAT     DFHMDF POS=(1,70),LENGTH=8,ATTRB=(ASKIP,NORM),COLOR=BLUE
+*
+         DFHMDF POS=(3,1),LENGTH=5,ATTRB=(ASKIP,NORM),               X
+               COLOR=TURQUOISE,INITIAL='BAN=>'
+BAN      DFHMDF POS=(3,7),LENGTH=13,ATTRB=(UNPROT,IC,FSET),          X
+               COLOR=YELLOW
+         DFHMDF POS=(3,25),LENGTH=7,ATTRB=(ASKIP,NORM),              X
+               COLOR=TURQUOISE,INITIAL='PERIOD='
+PERD     DFHMDF POS=(3,33),LENGTH=6,ATTRB=(UNPROT,FSET,NUM),         X
+               COLOR=YELLOW,PICIN='999999',PICOUT='999999'
+         DFHMDF POS=(3,42),LENGTH=5,ATTRB=(ASKIP,NORM),              X
+               COLOR=TURQUOISE,INITIAL='OCN=>'
+OCNN     DFHMDF POS=(3,48),LENGTH=4,ATTRB=(UNPROT,FSET),             X
+               COLOR=YELLOW
+*
+         DFHMDF POS=(5,1),LENGTH=13,ATTRB=(ASKIP,NORM),              X
+               COLOR=TURQUOISE,INITIAL='REASON CODE=>'
+RSN      DFHMDF POS=(5,15),LENGTH=2,ATTRB=(UNPROT,FSET),             X
+               COLOR=YELLOW
+         DFHMDF POS=(6,1),LENGTH=15,ATTRB=(ASKIP,NORM),              X
+               COLOR=TURQUOISE,INITIAL='DISPUTE AMOUNT='
+DAMT     DFHMDF POS=(6,17),LENGTH=15,ATTRB=(UNPROT,FSET,NUM),        X
+               COLOR=YELLOW,PICIN='S9(11)V99',PICOUT='---,---,---.9X
+               9'
+*
+         DFHMDF POS=(9,1),LENGTH=79,ATTRB=(ASKIP,NORM),              X
+               COLOR=GREEN,INITIAL='CURRENT SETTLEMENT POSITION FOR TX
+               HIS COUNTERPARTY / PERIOD'
+         DFHMDF POS=(10,1),LENGTH=10,ATTRB=(ASKIP,NORM),             X
+               COLOR=TURQUOISE,INITIAL='NET DUE..'
+SPOS     DFHMDF POS=(10,12),LENGTH=15,ATTRB=(ASKIP,NORM),            X
+               COLOR=GREEN,PICOUT='---,---,---.99'
+         DFHMDF POS=(11,1),LENGTH=10,ATTRB=(ASKIP,NORM),             X
+               COLOR=TURQUOISE,INITIAL='DIRECTION.'
+SDIR     DFHMDF POS=(11,12),LENGTH=1,ATTRB=(ASKIP,NORM),COLOR=GREEN
+*
+         DFHMDF POS=(14,1),LENGTH=32,ATTRB=(ASKIP,NORM),             X
+               COLOR=TURQUOISE,INITIAL='CONFIRM SUBMIT DISPUTE (Y/N) =X
+               =>'
+CONF     DFHMDF POS=(14,35),LENGTH=1,ATTRB=(UNPROT,FSET),            X
+               COLOR=YELLOW,HILIGHT=UNDERLINE
+*
+         DFHMDF POS=(23,1),LENGTH=1,ATTRB=(ASKIP,NORM),              X
+               COLOR=RED,INITIAL='*'
+MSGL     DFHMDF POS=(23,3),LENGTH=76,ATTRB=(ASKIP,BRT),COLOR=RED
+*
+         DFHMDF POS=(24,1),LENGTH=79,ATTRB=(ASKIP,NORM),             X
+               COLOR=BLUE,INITIAL='PF3=EXIT  PF5=SUBMIT  PF12=MENU'
+*
+         DFHMSD TYPE=FINAL
+         END
+*
+*****************************************************************
+* FIELD INVENTORY - MAINTAINED BY HAND, NOT ASSEMBLER OUTPUT.   *
+* CABS-STD-021 SECTION 3.                                       *
+*                                                                 *
+* FIELD    ROW  COL  LEN  I/O  NOTES                            *
+* BAN       03   07   13   I   BAN - NOT REQUIRED WHEN ENTERED  *
+*                               FROM CAB5 (SEE CABONL05 P1800)   *
+* PERD      03   33    6   I   BILL/SETTLE PERIOD               *
+* OCNN      03   48    4   I   COUNTERPARTY OCN                 *
+* RSN       05   15    2   I   DISPUTE REASON CODE              *
+* DAMT      06   17   15   I   DISPUTED AMOUNT                  *
+* SPOS      10   12   15   O   CURRENT SETTLEMENT NET DUE       *
+*                               (FROM A LINK TO CABONL06)         *
+* SDIR      11   12    1   O   SETTLEMENT DIRECTION             *
+* CONF      14   35    1   I   CONFIRM Y/N - SENT UNPROTECTED   *
+*                               FROM THE OUTSET ON THIS MAPSET   *
+* CDAT      01   70    8   O   SYSTEM DATE                      *
+* MSGL      23   03   76   O   ONE LINE MESSAGE AREA            *
+*                                                                 *
+* FIRST MAPSET BUILT UNDER THE 2004 COLOR TERM STANDARD -        *
+* COMPARE CABM0100-0400 WHICH CARRY NO COLOR/HILIGHT AT ALL.     *
+*****************************************************************

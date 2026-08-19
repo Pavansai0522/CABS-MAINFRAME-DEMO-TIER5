@@ -1,0 +1,130 @@
+/* REXX */
+/*********************************************************************/
+/* CABMONJB - MONITOR THE CABS/SETL JOB OUTPUT QUEUE VIA SDSF        */
+/* APPLICATION : CABS | SETL                                        */
+/* INPUTS      : SDSF OUTPUT QUEUE (ISFEXEC ST PANEL DATA)           */
+/* OUTPUTS     : TELCABS.OPS.CABMONJB.EXCEPT  (EXCEPTION LIST)       */
+/*             : TSO SEND TO THE ON-SHIFT OPERATOR FOR RC > 4        */
+/* CONTROL     : NONE                                                */
+/* RESTART     : RERUNNABLE - EACH RUN RE-SCANS THE CURRENT QUEUE    */
+/*                                                                    */
+/* RUN FROM THE HOURLY OPERATIONS MONITOR STARTED TASK.  SCANS THE   */
+/* SDSF OUTPUT QUEUE FOR JOBS WHOSE NAME BEGINS CAB OR SETL, PULLS   */
+/* THE HIGHEST CONDITION CODE ACROSS ALL STEPS FROM THE JES JOB LOG  */
+/* SUMMARY LINE, AND FLAGS ANYTHING OVER THE CABS-STD-060 THRESHOLD  */
+/* OF RC 4.  A JOB THAT ABENDED IS FLAGGED REGARDLESS OF ANY RC.     */
+/*                                                                    */
+/* REVISION HISTORY                                                  */
+/*   V1.00  1997-05-19  P.NAIR        INITIAL                        */
+/*   V1.01  1999-01-11  P.NAIR        ABEND DETECTION ADDED - RC     */
+/*                                    ALONE MISSED S0C7 AND S806     */
+/*   V1.03  2004-10-06  R.OKONKWO     SEND TO OPERATOR ADDED         */
+/*   V1.04  2012-03-02  A.BUKOWSKI    THRESHOLD MOVED FROM RC 8 TO   */
+/*                                    RC 4 AFTER THE MARCH INCIDENT  */
+/*   V1.05  2017-11-28  L.FERREIRA    EXCEPTION FILE FORMAT ALIGNED  */
+/*                                    WITH THE NEW SHIFT HANDOVER    */
+/*                                    SPREADSHEET IMPORT             */
+/*********************************************************************/
+
+ARG OPERID .
+IF OPERID = '' THEN OPERID = 'CABSOPS1'   /* DEFAULT OPERATOR ALIAS */
+
+RCTHRESH = 4
+
+"ISFCALLS ON"
+IF RC <> 0 THEN DO
+  SAY 'CABMONJB - ISFCALLS ON FAILED, RC='RC' - IS SDSF AVAILABLE?'
+  EXIT RC
+END
+
+ADDRESS ISFEXEC "ISFEXEC ST"
+IF RC <> 0 THEN DO
+  SAY 'CABMONJB - ISFEXEC ST FAILED, RC='RC
+  "ISFCALLS OFF"
+  EXIT RC
+END
+
+EXCNT = 0
+DO I = 1 TO JNAME.0
+  JNAME_I = STRIP(JNAME.I)
+  IF SUBSTR(JNAME_I,1,3) \= 'CAB' & SUBSTR(JNAME_I,1,4) \= 'SETL' THEN
+    ITERATE
+
+  JOBID_I = JOBID.I
+  OWNER_I = OWNERID.I
+  STATUS_I = STRIP(JSTATUS.I)
+  RETCODE_I = STRIP(JRETCODE.I)
+
+  /* JRETCODE FROM SDSF IS EITHER 'CCnnnn', 'ABEND Sxxx', 'ABEND Uxxxx' */
+  /* OR BLANK WHILE THE JOB IS STILL EXECUTING.                        */
+  ABENDED = (POS('ABEND',RETCODE_I) > 0)
+
+  MAXRC = -1
+  IF \ABENDED & SUBSTR(RETCODE_I,1,2) = 'CC' THEN
+    MAXRC = STRIP(SUBSTR(RETCODE_I,3))
+
+  FLAG = 'N'
+  REASON = ''
+  IF ABENDED THEN DO
+    FLAG = 'Y'
+    REASON = 'ABEND' RETCODE_I
+  END
+  ELSE IF MAXRC \= -1 THEN DO
+    IF MAXRC > RCTHRESH THEN DO
+      FLAG = 'Y'
+      REASON = 'RC='MAXRC' EXCEEDS THRESHOLD' RCTHRESH
+    END
+  END
+
+  IF FLAG = 'Y' THEN DO
+    EXCNT = EXCNT + 1
+    EXC.EXCNT = LEFT(JNAME_I,8) LEFT(JOBID_I,8) LEFT(OWNER_I,8),
+                LEFT(STATUS_I,10) LEFT(REASON,30)
+  END
+END
+EXC.0 = EXCNT
+
+"ISFEXEC ST CLOSE"
+"ISFCALLS OFF"
+
+/*-------------------------------------------------------------------*/
+/* WRITE THE EXCEPTION LIST, EVEN WHEN EMPTY - AN EMPTY FILE WITH A  */
+/* CURRENT TIMESTAMP TELLS THE NEXT SHIFT THE MONITOR ACTUALLY RAN.  */
+/*-------------------------------------------------------------------*/
+ADDRESS TSO
+
+OUTDS = "'TELCABS.OPS.CABMONJB.EXCEPT'"
+"ALLOC F(EXCOUT) DA("OUTDS") SHR REUSE"
+IF RC <> 0 THEN
+  "ALLOC F(EXCOUT) DA("OUTDS") NEW REUSE SPACE(1,1) TRACKS",
+       "LRECL(80) RECFM(F,B) DSORG(PS)"
+
+HDR.1 = 'CABMONJB EXCEPTION LIST -' DATE('U') TIME('N')
+HDR.2 = 'JOBNAME  JOBID    OWNER    STATUS     REASON'
+HDR.0 = 2
+"EXECIO 2 DISKW EXCOUT (STEM HDR."
+
+IF EXC.0 = 0 THEN DO
+  NOEXC.1 = 'NO EXCEPTIONS THIS SCAN'
+  NOEXC.0 = 1
+  "EXECIO 1 DISKW EXCOUT (STEM NOEXC. FINIS)"
+END
+ELSE
+  "EXECIO" EXC.0 "DISKW EXCOUT (STEM EXC. FINIS)"
+
+"FREE F(EXCOUT)"
+
+/*-------------------------------------------------------------------*/
+/* SEND ONE CONSOLIDATED MESSAGE TO THE OPERATOR RATHER THAN ONE PER */
+/* JOB - A BAD SETTLEMENT CYCLE CAN GENERATE TWENTY EXCEPTIONS IN A  */
+/* SINGLE SCAN AND TSO SEND HAS A ONE LINE LIMIT.                    */
+/*-------------------------------------------------------------------*/
+IF EXC.0 > 0 THEN DO
+  "SEND 'CABMONJB:" EXC.0 "CABS/SETL JOB(S) OVER THRESHOLD - SEE",
+       "TELCABS.OPS.CABMONJB.EXCEPT' USER("OPERID")"
+  SAY 'CABMONJB -' EXC.0 'EXCEPTION(S) LOGGED AND OPERATOR NOTIFIED'
+END
+ELSE
+  SAY 'CABMONJB - NO EXCEPTIONS THIS SCAN'
+
+EXIT 0

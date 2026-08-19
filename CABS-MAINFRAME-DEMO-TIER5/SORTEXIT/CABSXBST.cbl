@@ -1,0 +1,351 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CABSXBST.
+      *****************************************************************
+      * CABSXBST - SORT E35 OUTPUT EXIT - BURST SELECTION AND PREFIX  *
+      *            REMOVAL FOR THE PRINT STREAM                       *
+      * APPLICATION : CABS                                            *
+      * COMPILER    : ENTERPRISE COBOL                                *
+      * INVOKED BY  : OS SORT/MERGE, MODS E35=(CABSXBST,2048,         *
+      *               SORTEXIT,N) ON CONTROL CARD MEMBER              *
+      *               JCL/CTLCARDS/CABSRT12                           *
+      * INPUTS      : ONE 133 BYTE PRINT LINE PER ENTRY, CARRYING     *
+      *               THE TWENTY BYTE SORT PREFIX BUILT BY CABSXZIP   *
+      * OUTPUTS     : THE SAME LINES WITH THE PREFIX REMOVED AND THE  *
+      *               CARRIAGE CONTROL PUT BACK IN BYTE 1, OR         *
+      *               NOTHING FOR A DOCUMENT THAT IS NOT MAILED       *
+      * CONTROL     : NONE - EXITS DO NOT WRITE CTLOUT, CABS-STD-041  *
+      * BALANCE     : LINES IN = LINES RELEASED + LINES SUPPRESSED    *
+      * RESTART     : NOT RESTARTABLE - RERUN THE WHOLE SORT STEP     *
+      *                                                               *
+      * LINKAGE CONVENTION                                            *
+      *   REGISTER 1 ADDRESSES A THREE WORD PARAMETER LIST.  WORD     *
+      *   ONE IS THE ADDRESS OF THE RECORD LEAVING THE FINAL MERGE    *
+      *   OR BINARY ZERO AT END OF MERGE.  WORD TWO ADDRESSES THE     *
+      *   LAST RECORD WRITTEN TO SORTOUT.  WORD THREE ADDRESSES THE   *
+      *   LENGTH HALFWORD AND IS NOT REFERENCED ON A FIXED FILE.      *
+      *   RETURN-CODE - 00 TAKE THE NEXT RECORD, 04 DELETE, 08 WRITE  *
+      *   THE RECORD ADDRESSED BY WORD ONE AND RE-ENTER WITH THE      *
+      *   SAME INPUT, 12 NO FURTHER ENTRY, 16 TERMINATE.              *
+      *                                                               *
+      * THE INSERT PROTOCOL USED HERE                                 *
+      *   EVERY LINE THAT ARRIVES IS COPIED INTO THE DOCUMENT BUFFER  *
+      *   AND THEN DELETED WITH A REPLY OF 04, SO NO LINE REACHES     *
+      *   SORTOUT ON ITS OWN ENTRY.  THE BUFFER IS DRAINED BY         *
+      *   SETTING WORD ONE TO THE ADDRESS OF A HELD LINE AND          *
+      *   REPLYING 08.  THE SORT WRITES THAT LINE AND ENTERS THE      *
+      *   EXIT AGAIN WITH THE SAME INPUT STILL ADDRESSED, SO ONE      *
+      *   LINE LEAVES PER ENTRY AND THE INPUT LINE THAT CAUSED THE    *
+      *   BREAK IS DEALT WITH ONLY AFTER THE DRAIN IS FINISHED.       *
+      *   WS-STATE HOLDS THE POSITION ACROSS THE RE-ENTRIES.          *
+      *                                                               *
+      * THE BURST RULE                                                *
+      *   THE FIRST LINE OF A DOCUMENT CARRIES THE CARRIAGE CONTROL   *
+      *   THE FORMAT FAMILY PUT ON IT.  A 7 MEANS THE INVOICE WAS     *
+      *   COMPLETED.  ANYTHING ELSE MEANS IT WAS NOT, AND THE WHOLE   *
+      *   DOCUMENT IS DELETED SO IT DOES NOT REACH THE INSERTER.      *
+      *   THE DECISION IS TAKEN ON THE FIRST LINE, BEFORE THE REST    *
+      *   OF THE DOCUMENT HAS BEEN SEEN, WHICH IS WHY THE DOCUMENT    *
+      *   IS HELD AND NOT STREAMED.  NOTHING IN THE FORMAT FAMILY     *
+      *   READS THIS RULE OR REPORTS ON IT.                           *
+      *                                                               *
+      * REVISION HISTORY                                              *
+      *   V1.00  1994-03-22  R.T.WHEELER   INITIAL - ASSEMBLER F      *
+      *   V1.03  1998-04-30  D.OKONKWO     BUFFER RAISED TO 400       *
+      *   V1.06  2003-09-11  B.R.HALVORSEN OVERSIZE RELEASED WHOLE    *
+      *   V2.00  2006-11-27  P.NAIR        RECODED IN COBOL FOR LE    *
+      *   V2.03  2012-07-24  T.YAMASHITA   PREFIX STRIP MOVED HERE    *
+      *   V2.05  2019-02-11  M.HAAS        RECOMPILE ONLY - LE V6.3   *
+      *****************************************************************
+       ENVIRONMENT DIVISION.
+       CONFIGURATION SECTION.
+       SOURCE-COMPUTER. IBM-370.
+       OBJECT-COMPUTER. IBM-370.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+      *
+      * THE MODULE IS LOADED ONCE FOR THE WHOLE MERGE.  THE BUFFER,
+      * THE STATE BYTE AND EVERY COUNTER BELOW CARRY FROM ONE ENTRY
+      * TO THE NEXT AND ARE NOT RESET EXCEPT WHERE SAID.
+       01  WS-MODULE-IDENT.
+           05  FILLER                  PIC X(08) VALUE 'CABSXBST'.
+           05  FILLER                  PIC X(08) VALUE ' V2.05  '.
+       01  WS-STATE                    PIC X(01) VALUE ' '.
+           88  WS-STATE-NORMAL         VALUE ' '.
+           88  WS-FLUSHING             VALUE 'F'.
+           88  WS-STREAM-WRITTEN       VALUE 'W'.
+       01  WS-SWITCHES.
+           05  WS-FIRST-ENTRY-SW       PIC X(01) VALUE 'Y'.
+               88  WS-FIRST-ENTRY      VALUE 'Y'.
+           05  WS-DOC-OPEN-SW          PIC X(01) VALUE 'N'.
+               88  WS-DOC-OPEN         VALUE 'Y'.
+           05  WS-SUPPRESS-SW          PIC X(01) VALUE 'N'.
+               88  WS-SUPPRESSED       VALUE 'Y'.
+           05  WS-STREAM-SW            PIC X(01) VALUE 'N'.
+               88  WS-STREAMING        VALUE 'Y'.
+           05  WS-REPORT-SW            PIC X(01) VALUE 'N'.
+               88  WS-REPORT-DONE      VALUE 'Y'.
+       01  WS-COUNTERS.
+           05  WS-ENTRY-CNT            PIC S9(11) COMP-3 VALUE 0.
+           05  WS-DOC-RELEASED         PIC S9(09) COMP-3 VALUE 0.
+           05  WS-DOC-SUPPRESSED       PIC S9(09) COMP-3 VALUE 0.
+           05  WS-LINES-RELEASED       PIC S9(11) COMP-3 VALUE 0.
+           05  WS-LINES-SUPPRESSED     PIC S9(11) COMP-3 VALUE 0.
+           05  WS-OVERSIZE-CNT         PIC S9(09) COMP-3 VALUE 0.
+       01  WS-DOC-CONTROL.
+           05  WS-CUR-DOC-ORD          PIC 9(06) VALUE 0.
+           05  WS-IN-DOC-ORD           PIC 9(06) VALUE 0.
+           05  WS-IN-LINE-ORD          PIC 9(04) VALUE 0.
+           05  WS-BUF-COUNT            PIC S9(04) COMP VALUE 0.
+           05  WS-BUF-LIMIT            PIC S9(04) COMP VALUE 400.
+           05  WS-FLUSH-IDX            PIC S9(04) COMP VALUE 0.
+      *
+      * THE LINE AS IT WILL BE WRITTEN.  THE CARRIAGE CONTROL COMES
+      * BACK OUT OF THE LAST POSITION OF THE PREFIX AND THE
+      * NINETEEN BYTES BEHIND IT ARE RESTORED AS BLANKS, WHICH IS
+      * WHAT THE FORMAT FAMILY PUT THERE.
+       01  WS-LINE-WORK.
+           05  WS-LW-CTL-CHAR          PIC X(01) VALUE SPACE.
+           05  WS-LW-BLANKS            PIC X(19) VALUE SPACES.
+           05  WS-LW-TEXT              PIC X(113) VALUE SPACES.
+       01  WS-RELEASE-LINE             PIC X(133) VALUE SPACES.
+      *
+      * THE DOCUMENT BUFFER.  FOUR HUNDRED LINES COVERS EVERY
+      * INVOICE THE FORMAT FAMILY HAS CUT SINCE THE 1998 CHANGE.
+       01  WS-BUFFER.
+           05  WS-BUF-LINE OCCURS 400 TIMES
+                                       PIC X(133).
+      *
+       LINKAGE SECTION.
+       01  LK-PARM-LIST.
+           05  LK-RECORD-PTR           POINTER.
+           05  LK-PREV-PTR             POINTER.
+           05  LK-LENGTH-PTR           POINTER.
+      *
+      * THE LINE AS IT LEAVES THE MERGE, PREFIX STILL ON IT.  THE
+      * DOCUMENT ORDINAL IS CARRIED AS CHARACTERS AS WELL AS
+      * DIGITS - A LINE WHOSE ORDINAL IS NOT NUMERIC DID NOT COME
+      * THROUGH CABSXZIP AND IS TREATED AS DOCUMENT ZERO.
+       01  LK-SORT-LINE.
+           05  LK-SL-PREFIX.
+               10  LK-SL-ZIP5          PIC X(05).
+               10  LK-SL-ZIP4          PIC X(04).
+               10  LK-SL-DOC-ORD-X     PIC X(06).
+               10  LK-SL-DOC-ORD REDEFINES LK-SL-DOC-ORD-X
+                                       PIC 9(06).
+               10  LK-SL-LINE-ORD-X    PIC X(04).
+               10  LK-SL-LINE-ORD REDEFINES LK-SL-LINE-ORD-X
+                                       PIC 9(04).
+               10  LK-SL-CTL-CHAR      PIC X(01).
+                   88  LK-SL-COMPLETE  VALUE '7'.
+           05  LK-SL-TEXT              PIC X(113).
+      *
+       PROCEDURE DIVISION USING LK-PARM-LIST.
+       P0000-MAINLINE.
+           MOVE ZERO TO RETURN-CODE.
+           IF WS-FIRST-ENTRY
+               PERFORM P1000-INIT THRU P1000-EXIT
+           END-IF.
+           IF LK-RECORD-PTR = NULL
+               PERFORM P8000-END-OF-MERGE THRU P8000-EXIT
+               GOBACK
+           END-IF.
+      * THE PREVIOUS ENTRY RELEASED THE INPUT LINE ITSELF.  THE
+      * SORT HAS WRITTEN IT AND IS PRESENTING IT AGAIN, SO IT IS
+      * DELETED NOW TO STOP IT BEING WRITTEN TWICE.
+           IF WS-STREAM-WRITTEN
+               SET WS-STATE-NORMAL TO TRUE
+               MOVE 4 TO RETURN-CODE
+               GOBACK
+           END-IF.
+           SET ADDRESS OF LK-SORT-LINE TO LK-RECORD-PTR.
+           IF WS-FLUSHING
+               PERFORM P5000-FLUSH-STEP THRU P5000-EXIT
+               IF WS-FLUSHING
+                   GOBACK
+               END-IF
+               PERFORM P3000-HANDLE-LINE THRU P3000-EXIT
+               GOBACK
+           END-IF.
+           ADD 1 TO WS-ENTRY-CNT.
+           PERFORM P2000-STRIP-PREFIX THRU P2000-EXIT.
+           PERFORM P3000-HANDLE-LINE THRU P3000-EXIT.
+           GOBACK.
+
+       P1000-INIT.
+           MOVE 'N' TO WS-FIRST-ENTRY-SW.
+           DISPLAY 'CABSXBST ENTERED - BURST SELECTION'.
+
+       P1000-EXIT.
+           EXIT.
+
+       P2000-STRIP-PREFIX.
+      * TAKE THE TWENTY BYTE KEY OFF AND PUT THE PRINT LINE BACK
+      * THE WAY THE FORMATTER WROTE IT.  THE STRIPPED LINE IS HELD
+      * IN WORKING STORAGE AND SURVIVES THE RE-ENTRIES OF A DRAIN.
+           MOVE LK-SL-CTL-CHAR TO WS-LW-CTL-CHAR.
+           MOVE SPACES         TO WS-LW-BLANKS.
+           MOVE LK-SL-TEXT     TO WS-LW-TEXT.
+           MOVE ZERO TO WS-IN-DOC-ORD.
+           MOVE ZERO TO WS-IN-LINE-ORD.
+           IF LK-SL-DOC-ORD-X IS NUMERIC
+               MOVE LK-SL-DOC-ORD TO WS-IN-DOC-ORD
+           END-IF.
+           IF LK-SL-LINE-ORD-X IS NUMERIC
+               MOVE LK-SL-LINE-ORD TO WS-IN-LINE-ORD
+           END-IF.
+
+       P2000-EXIT.
+           EXIT.
+
+       P3000-HANDLE-LINE.
+      * A CHANGE OF DOCUMENT ORDINAL IS THE DOCUMENT BOUNDARY, AND
+      * IS THE ONLY BOUNDARY AVAILABLE ON THIS SIDE OF THE MERGE.
+           IF WS-DOC-OPEN AND WS-IN-DOC-ORD NOT = WS-CUR-DOC-ORD
+               PERFORM P4000-CLOSE-DOCUMENT THRU P4000-EXIT
+               IF WS-FLUSHING
+                   PERFORM P5000-FLUSH-STEP THRU P5000-EXIT
+                   GO TO P3000-EXIT
+               END-IF
+           END-IF.
+           IF NOT WS-DOC-OPEN
+               PERFORM P3400-OPEN-DOCUMENT THRU P3400-EXIT
+           END-IF.
+           PERFORM P3600-TAKE-LINE THRU P3600-EXIT.
+
+       P3000-EXIT.
+           EXIT.
+
+       P3400-OPEN-DOCUMENT.
+      * THE LINE IN HAND IS THE FIRST LINE OF A NEW DOCUMENT AND
+      * ITS RESTORED CARRIAGE CONTROL DECIDES THE WHOLE DOCUMENT.
+           MOVE WS-IN-DOC-ORD TO WS-CUR-DOC-ORD.
+           MOVE 'Y' TO WS-DOC-OPEN-SW.
+           MOVE 'N' TO WS-STREAM-SW.
+           MOVE ZERO TO WS-BUF-COUNT.
+           MOVE ZERO TO WS-FLUSH-IDX.
+           IF WS-LW-CTL-CHAR = '7'
+               MOVE 'N' TO WS-SUPPRESS-SW
+           ELSE
+               MOVE 'Y' TO WS-SUPPRESS-SW
+           END-IF.
+
+       P3400-EXIT.
+           EXIT.
+
+       P3600-TAKE-LINE.
+      * A SUPPRESSED DOCUMENT IS NEVER BUFFERED - EVERY LINE OF IT
+      * IS DELETED AS IT ARRIVES AND COUNTED.
+           IF WS-SUPPRESSED
+               ADD 1 TO WS-LINES-SUPPRESSED
+               MOVE 4 TO RETURN-CODE
+               GO TO P3600-EXIT
+           END-IF.
+      * A DOCUMENT THAT HAS ALREADY PASSED THE BUFFER LIMIT IS
+      * RELEASED LINE BY LINE FOR THE REST OF ITS LENGTH.
+           IF WS-STREAMING
+               MOVE WS-LINE-WORK TO WS-RELEASE-LINE
+               SET LK-RECORD-PTR TO ADDRESS OF WS-RELEASE-LINE
+               SET WS-STREAM-WRITTEN TO TRUE
+               ADD 1 TO WS-LINES-RELEASED
+               MOVE 8 TO RETURN-CODE
+               GO TO P3600-EXIT
+           END-IF.
+      * THE FOUR HUNDRED AND FIRST LINE.  A DOCUMENT THIS LONG IS
+      * RELEASED WHOLE WITHOUT WAITING FOR ITS BOUNDARY - THE HELD
+      * LINES GO OUT FIRST AND THE REST FOLLOWS LINE BY LINE.
+           IF WS-BUF-COUNT NOT < WS-BUF-LIMIT
+               ADD 1 TO WS-OVERSIZE-CNT
+               ADD 1 TO WS-DOC-RELEASED
+               MOVE 'Y' TO WS-STREAM-SW
+               MOVE ZERO TO WS-FLUSH-IDX
+               SET WS-FLUSHING TO TRUE
+               PERFORM P5000-FLUSH-STEP THRU P5000-EXIT
+               GO TO P3600-EXIT
+           END-IF.
+           ADD 1 TO WS-BUF-COUNT.
+           MOVE WS-LINE-WORK TO WS-BUF-LINE (WS-BUF-COUNT).
+           MOVE 4 TO RETURN-CODE.
+
+       P3600-EXIT.
+           EXIT.
+
+       P4000-CLOSE-DOCUMENT.
+      * THE DOCUMENT IN HAND HAS ENDED.  A SUPPRESSED ONE HAS
+      * NOTHING HELD.  AN OVERSIZE ONE WAS DRAINED WHEN IT PASSED
+      * THE LIMIT AND HAS NOTHING LEFT.  ANY OTHER ONE IS RELEASED
+      * NOW, ONE LINE PER ENTRY.
+           MOVE 'N' TO WS-DOC-OPEN-SW.
+           IF WS-SUPPRESSED
+               ADD 1 TO WS-DOC-SUPPRESSED
+               MOVE ZERO TO WS-BUF-COUNT
+               GO TO P4000-EXIT
+           END-IF.
+           IF WS-STREAMING
+               MOVE ZERO TO WS-BUF-COUNT
+               GO TO P4000-EXIT
+           END-IF.
+           IF WS-BUF-COUNT = ZERO
+               GO TO P4000-EXIT
+           END-IF.
+           ADD 1 TO WS-DOC-RELEASED.
+           MOVE ZERO TO WS-FLUSH-IDX.
+           SET WS-FLUSHING TO TRUE.
+
+       P4000-EXIT.
+           EXIT.
+
+       P5000-FLUSH-STEP.
+      * ONE HELD LINE PER ENTRY.  WHEN THE LAST ONE HAS GONE THE
+      * STATE IS PUT BACK TO NORMAL AND THE CALLER DEALS WITH THE
+      * INPUT LINE THAT IS STILL WAITING.
+           IF WS-FLUSH-IDX < WS-BUF-COUNT
+               ADD 1 TO WS-FLUSH-IDX
+               MOVE WS-BUF-LINE (WS-FLUSH-IDX) TO WS-RELEASE-LINE
+               SET LK-RECORD-PTR TO ADDRESS OF WS-RELEASE-LINE
+               ADD 1 TO WS-LINES-RELEASED
+               MOVE 8 TO RETURN-CODE
+               GO TO P5000-EXIT
+           END-IF.
+           SET WS-STATE-NORMAL TO TRUE.
+           MOVE ZERO TO WS-BUF-COUNT.
+           MOVE ZERO TO WS-FLUSH-IDX.
+           MOVE ZERO TO RETURN-CODE.
+
+       P5000-EXIT.
+           EXIT.
+
+       P8000-END-OF-MERGE.
+      * THE LAST DOCUMENT OF THE FILE HAS NO FOLLOWING DOCUMENT TO
+      * CLOSE IT, SO IT IS CLOSED AND DRAINED HERE.  THE SORT KEEPS
+      * ENTERING WITH A NULL RECORD ADDRESS FOR AS LONG AS THE
+      * REPLY IS 08, WHICH IS WHAT DRAINS THE BUFFER.
+           IF WS-DOC-OPEN
+               PERFORM P4000-CLOSE-DOCUMENT THRU P4000-EXIT
+           END-IF.
+           IF WS-FLUSHING
+               PERFORM P5000-FLUSH-STEP THRU P5000-EXIT
+               IF RETURN-CODE = 8
+                   GO TO P8000-EXIT
+               END-IF
+           END-IF.
+           IF NOT WS-REPORT-DONE
+               MOVE 'Y' TO WS-REPORT-SW
+               PERFORM P8600-REPORT THRU P8600-EXIT
+           END-IF.
+           MOVE ZERO TO RETURN-CODE.
+
+       P8000-EXIT.
+           EXIT.
+
+       P8600-REPORT.
+      * THE ONLY ACCOUNT OF WHAT WAS KEPT OUT OF THE MAIL RUN.
+      * NOTHING DOWNSTREAM OF THE INSERTER RECEIVES THESE FIGURES.
+           DISPLAY 'CABSXBST ENTRIES     ' WS-ENTRY-CNT.
+           DISPLAY 'CABSXBST DOCS OUT    ' WS-DOC-RELEASED.
+           DISPLAY 'CABSXBST DOCS HELD   ' WS-DOC-SUPPRESSED.
+           DISPLAY 'CABSXBST LINES OUT   ' WS-LINES-RELEASED.
+           DISPLAY 'CABSXBST LINES HELD  ' WS-LINES-SUPPRESSED.
+           DISPLAY 'CABSXBST OVERSIZE    ' WS-OVERSIZE-CNT.
+
+       P8600-EXIT.
+           EXIT.

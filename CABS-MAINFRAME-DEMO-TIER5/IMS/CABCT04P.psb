@@ -1,0 +1,18 @@
+*****************************************************************
+* CABCT04P - PSB FOR CABCT04 (BILL HISTORY LOAD)                *
+* SENSITIVE TO BHSTSEG AND BHSTDTL.  PROCOPT=AP (GET, UPDATE,   *
+* INSERT) - THIS IS THE NIGHTLY LOAD THAT BUILDS BHSTSEG/        *
+* BHSTDTL FROM THE RENDERED BILL EXTRACT.                        *
+* REVISION HISTORY                                              *
+*   V1.00  1989-01-30  R.OKAFOR    INITIAL GEN                  *
+*   V1.01  2010-02-11  D.WASILEWSKI RECOMPILE AFTER BHSTATUS     *
+*                                  FIELD ADDED TO CABBHSDB        *
+*****************************************************************
+         PRINT NOGEN
+*
+         PCB   TYPE=DB,DBDNAME=CABBHSDB,KEYLEN=26,PROCOPT=AP
+         SENSEG NAME=BHSTSEG,PARENT=0
+         SENSEG NAME=BHSTDTL,PARENT=BHSTSEG
+*
+         PSBGEN LANG=COBOL,PSBNAME=CABCT04P,CMPAT=YES
+         END

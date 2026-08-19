@@ -1,0 +1,164 @@
+/* REXX */
+/*********************************************************************/
+/* CABGENJC - GENERATE CYCLE SYMBOLICS AND SUBMIT A CABS/SETL JOB    */
+/* APPLICATION : CABS | SETL                                        */
+/* INPUTS      : TELCABS.CABS.CONTROL.PARMTBL  (FIXED 80 BYTE CARDS) */
+/* OUTPUTS     : TEMPORARY JCL MEMBER, SUBMITTED TO THE INTERNAL     */
+/*               READER                                              */
+/* CONTROL     : NONE - THIS EXEC DOES NOT WRITE A CABSCTL RECORD.   */
+/*               THE JOB IT SUBMITS WRITES ITS OWN.                  */
+/* RESTART     : RERUNNABLE - RESUBMIT WITH THE SAME PARM CARD       */
+/*                                                                    */
+/* SAVES OPERATIONS RETYPING THE CYCLE DATE AND THE HALF DOZEN OTHER */
+/* SYMBOLICS THAT CHANGE EVERY RUN IN NINETEEN DIFFERENT JCL         */
+/* MEMBERS.  ONE CONTROL TABLE ROW PER SYMBOLIC PER JOB, KEYED BY AN */
+/* EFFECTIVE CYCLE WINDOW SO A NEW RATE OR PERIOD SYMBOL CAN BE      */
+/* STAGED AHEAD OF THE DATE IT TAKES EFFECT WITHOUT AN EXTRA         */
+/* OPERATOR STEP ON CUTOVER NIGHT.  SEE CABS-STD-051 FOR THE CARD    */
+/* LAYOUT AND THE CHANGE PROCEDURE FOR ADDING A NEW SYMBOLIC.        */
+/*                                                                    */
+/* REVISION HISTORY                                                  */
+/*   V1.00  1994-03-14  P.NAIR        INITIAL - CABS3100 ONLY        */
+/*   V1.02  1996-08-02  P.NAIR        GENERALISED TO ANY JOB/PROC    */
+/*   V1.04  2001-02-27  R.OKONKWO     EFFECTIVE CYCLE WINDOW ADDED,  */
+/*                                    REPLACES THE OLD "TODAY ONLY"  */
+/*                                    SELECTION RULE                 */
+/*   V1.05  2008-06-19  A.BUKOWSKI    ACTIVE SWITCH ADDED SO A ROW   */
+/*                                    CAN BE STAGED WITHOUT BEING    */
+/*                                    SELECTED YET                   */
+/*   V1.06  2016-09-30  L.FERREIRA    OUTTRAP AROUND THE SUBMIT      */
+/*                                    ADDED TO CAPTURE THE JOB       */
+/*                                    NUMBER FOR THE OPERATOR LOG    */
+/*********************************************************************/
+
+ARG JOBWANT .
+
+IF JOBWANT = '' THEN DO
+  SAY 'CABGENJC - JOB NAME REQUIRED, E.G. EX CABGENJC CABS3100'
+  EXIT 16
+END
+
+PARMTBL = "'TELCABS.CABS.CONTROL.PARMTBL'"
+TODAY_D = DATE('S')                     /* YYYYMMDD, ORDERED FORM   */
+
+ADDRESS TSO
+
+/*-------------------------------------------------------------------*/
+/* ALLOCATE AND READ THE CONTROL TABLE.  FIXED 80 BYTE CARDS:        */
+/*   1-8    JOB NAME                                                 */
+/*   9-16   PROC NAME                                                */
+/*   17-24  SYMBOLIC NAME  (THE // SET VARIABLE, WITHOUT THE &&)     */
+/*   25-54  SYMBOLIC VALUE                                           */
+/*   55-62  EFFECTIVE FROM  YYYYMMDD                                 */
+/*   63-70  EFFECTIVE THRU  YYYYMMDD                                 */
+/*   71     ACTIVE SWITCH   Y/N                                      */
+/*   72-80  RESERVED                                                 */
+/*-------------------------------------------------------------------*/
+"ALLOC F(PARMIN) DA("PARMTBL") SHR REUSE"
+IF RC <> 0 THEN DO
+  SAY 'CABGENJC - ALLOC FAILED ON PARMTBL, RC='RC
+  EXIT RC
+END
+
+"EXECIO * DISKR PARMIN (STEM CARD. FINIS)"
+IF RC <> 0 THEN DO
+  SAY 'CABGENJC - EXECIO READ FAILED, RC='RC
+  "FREE F(PARMIN)"
+  EXIT RC
+END
+"FREE F(PARMIN)"
+
+/*-------------------------------------------------------------------*/
+/* BUILD THE LIST OF SYMBOLICS FOR THE REQUESTED JOB WHOSE           */
+/* EFFECTIVE WINDOW COVERS TODAY AND WHOSE ACTIVE SWITCH IS Y.  IF   */
+/* MORE THAN ONE ROW MATCHES THE SAME SYMBOLIC NAME AND WINDOW, THE  */
+/* LAST ONE READ WINS - THE TABLE IS MAINTAINED IN ARRIVAL ORDER,    */
+/* NOT IN A SORTED ORDER, SO THIS IS THE SAME RULE THE OLD MANUAL    */
+/* JCL EDIT FOLLOWED WHEN TWO PEOPLE UPDATED THE SAME MEMBER.        */
+/*-------------------------------------------------------------------*/
+SYMCNT = 0
+DO I = 1 TO CARD.0
+  CARD = CARD.I
+  IF LENGTH(CARD) < 71 THEN ITERATE
+  C_JOB   = STRIP(SUBSTR(CARD,1,8))
+  C_PROC  = STRIP(SUBSTR(CARD,9,8))
+  C_SYM   = STRIP(SUBSTR(CARD,17,8))
+  C_VAL   = STRIP(SUBSTR(CARD,25,30))
+  C_FROM  = SUBSTR(CARD,55,8)
+  C_THRU  = SUBSTR(CARD,63,8)
+  C_ACT   = SUBSTR(CARD,71,1)
+
+  IF C_JOB \= JOBWANT THEN ITERATE
+  IF C_ACT \= 'Y' THEN ITERATE
+  IF TODAY_D < C_FROM THEN ITERATE
+  IF TODAY_D > C_THRU THEN ITERATE
+
+  SYMCNT = SYMCNT + 1
+  SYM.SYMCNT.NAME = C_SYM
+  SYM.SYMCNT.VAL  = C_VAL
+  PROCNAME = C_PROC
+END
+SYM.0 = SYMCNT
+
+IF SYMCNT = 0 THEN DO
+  SAY 'CABGENJC - NO ACTIVE PARMTBL ROW COVERS TODAY FOR' JOBWANT
+  SAY '           CHECK THE EFFECTIVE CYCLE WINDOW AND THE ACTIVE'
+  SAY '           SWITCH BEFORE ASSUMING THIS IS A DATA ERROR.'
+  EXIT 8
+END
+
+/*-------------------------------------------------------------------*/
+/* BUILD THE JCL.  ONE // SET STATEMENT PER SYMBOLIC, THEN A SINGLE  */
+/* EXEC STATEMENT NAMING THE PROC AND PASSING EVERY SYMBOLIC AS A    */
+/* SYMBOLIC PARAMETER.  THE ACTUAL PROC MEMBER IS NOT TOUCHED - THE  */
+/* VALUES A JOB RUNS WITH COME ENTIRELY FROM THE ROWS SELECTED       */
+/* ABOVE.                                                             */
+/*-------------------------------------------------------------------*/
+JOBCARD.1 = "//"JOBWANT" JOB (CABS,OPS),'GENERATED BY CABGENJC',"
+JOBCARD.2 = "//             CLASS=A,MSGCLASS=X,MSGLEVEL=(1,1),"
+JOBCARD.3 = "//             NOTIFY=&SYSUID,REGION=0M"
+JOBCARD.4 = "//*"
+JOBCARD.5 = "//* GENERATED" DATE('U') TIME('N')"BY CABGENJC - DO NOT HAND EDIT"
+JOBCARD.6 = "//*"
+N = 6
+
+DO I = 1 TO SYM.0
+  N = N + 1
+  JOBCARD.N = "// SET" SYM.I.NAME"='"SYM.I.VAL"'"
+END
+
+N = N + 1
+EXECLINE = "//STEP010  EXEC" PROCNAME
+DO I = 1 TO SYM.0
+  EXECLINE = EXECLINE",&&"SYM.I.NAME
+END
+JOBCARD.N = EXECLINE
+JOBCARD.0 = N
+
+/*-------------------------------------------------------------------*/
+/* WRITE THE GENERATED JCL TO A TEMPORARY MEMBER AND SUBMIT IT.      */
+/* THE MEMBER IS NOT KEPT AFTER SUBMISSION - CABS-STD-051 TREATS THE */
+/* PARMTBL ROWS AS THE SYSTEM OF RECORD, NOT THE GENERATED CARDS.    */
+/*-------------------------------------------------------------------*/
+TEMPDS = "'TELCABS.OPS."USERID()".GENJCL.TEMP'"
+"ALLOC F(GENOUT) DA("TEMPDS") NEW REUSE SPACE(1,1) TRACKS",
+     "LRECL(80) RECFM(F,B) DSORG(PS)"
+IF RC <> 0 THEN DO
+  SAY 'CABGENJC - ALLOC FAILED ON TEMP JCL DATASET, RC='RC
+  EXIT RC
+END
+
+"EXECIO" JOBCARD.0 "DISKW GENOUT (STEM JOBCARD. FINIS)"
+"FREE F(GENOUT)"
+
+X = OUTTRAP('SUBOUT.')
+"SUBMIT" TEMPDS
+X = OUTTRAP('OFF')
+
+DO I = 1 TO SUBOUT.0
+  SAY SUBOUT.I
+END
+
+"DELETE" TEMPDS
+SAY 'CABGENJC - SUBMITTED' JOBWANT 'USING PROC' PROCNAME 'WITH' SYM.0 'SYMBOLICS'
+EXIT 0

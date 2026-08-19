@@ -1,0 +1,21 @@
+*****************************************************************
+* CABCT02P - PSB FOR CABCT02 (CARRIER FACTOR EXTRACT)           *
+* SENSITIVE TO CARRSEG AND CARRFACT ONLY - THE NIGHTLY FACTOR   *
+* EXTRACT DOES NOT NEED THE BILLING OR AGREEMENT DEPENDENTS.    *
+* PROCOPT=A (GET AND UPDATE) SO A BAD FACTOR EFFECTIVE DATE     *
+* CAN BE ZAPPED IN PLACE UNDER CABS-STD-041 WITHOUT A SEPARATE  *
+* ONLINE TRANSACTION.                                            *
+* REVISION HISTORY                                              *
+*   V1.00  1992-02-27  L.FENNIMORE INITIAL GEN, PAIRED WITH      *
+*                                  CABCARDB V1.02                *
+*   V1.01  2004-08-14  D.WASILEWSKI RECOMPILE AFTER DBDGEN OSAM  *
+*                                  BUFFER POOL MOVE               *
+*****************************************************************
+         PRINT NOGEN
+*
+         PCB   TYPE=DB,DBDNAME=CABCARDB,KEYLEN=9,PROCOPT=A
+         SENSEG NAME=CARRSEG,PARENT=0
+         SENSEG NAME=CARRFACT,PARENT=CARRSEG
+*
+         PSBGEN LANG=COBOL,PSBNAME=CABCT02P,CMPAT=YES
+         END

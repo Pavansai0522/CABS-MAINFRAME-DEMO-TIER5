@@ -1,0 +1,91 @@
+*****************************************************************
+* CABM0100 - MAIN MENU MAPSET FOR CAB0 (CABONL01)               *
+* ONE MAP, ONE SCREEN.  ORIGINAL 1991 MENU LAYOUT.  NO COLOR    *
+* OR HILIGHT ATTRIBUTES - THIS MAPSET PREDATES THE COLOR TERM   *
+* STANDARD ADOPTED WITH THE 3270 REPLACEMENT PROGRAM IN 2004.   *
+* SEE CABS-STD-021 FOR SCREEN LAYOUT STANDARDS.                 *
+*                                                                 *
+* REVISION HISTORY                                               *
+*   V1.00  1991-04-02  R.KESSLER    INITIAL - FOUR OPTIONS       *
+*   V1.01  1994-11-18  R.KESSLER    OPTION 5 SETTLEMENT ADDED    *
+*   V1.02  2001-02-27  D.OYELARAN   USERID LINE ADDED FOR RACF   *
+*                                   PASSTICKET ROLLOUT            *
+*   V1.03  2011-06-09  M.OYELARAN   RECOMPILE ONLY - NO LAYOUT   *
+*                                   CHANGE                        *
+*****************************************************************
+         PRINT NOGEN
+CABM01   DFHMSD TYPE=&SYSPARM,MODE=INOUT,LANG=COBOL,STORAGE=AUTO,     X
+               TIOAPFX=YES,CTRL=(FREEKB,FRSET),EXTATT=MAPONLY
+*
+MENUMAP  DFHMDI SIZE=(24,80),LINE=1,COLUMN=1
+*
+* LINE 1 - TRANSACTION ID, TITLE, SYSTEM DATE/TIME
+         DFHMDF POS=(1,1),LENGTH=4,ATTRB=(ASKIP,NORM),               X
+               INITIAL='CAB0'
+         DFHMDF POS=(1,10),LENGTH=42,ATTRB=(ASKIP,NORM),             X
+               INITIAL='CARRIER ACCESS BILLING SYSTEM - MAIN MENU'
+CDAT     DFHMDF POS=(1,70),LENGTH=8,ATTRB=(ASKIP,NORM)
+         DFHMDF POS=(2,70),LENGTH=1,ATTRB=(ASKIP,NORM),INITIAL='/'
+CTIM     DFHMDF POS=(2,72),LENGTH=8,ATTRB=(ASKIP,NORM)
+*
+         DFHMDF POS=(3,1),LENGTH=79,ATTRB=(ASKIP,NORM),              X
+               INITIAL='-------------------------------------------X
+               -----------------------------------'
+*
+* MENU OPTIONS - ONE LINE PER TRANSACTION IN THE SUITE
+         DFHMDF POS=(4,10),LENGTH=40,ATTRB=(ASKIP,NORM),             X
+               INITIAL='1  -  CARRIER (OCN) INQUIRY'
+         DFHMDF POS=(6,10),LENGTH=40,ATTRB=(ASKIP,NORM),             X
+               INITIAL='2  -  INVOICE INQUIRY'
+         DFHMDF POS=(8,10),LENGTH=40,ATTRB=(ASKIP,NORM),             X
+               INITIAL='3  -  FACTOR (PIU/PLU) MAINTENANCE'
+         DFHMDF POS=(10,10),LENGTH=40,ATTRB=(ASKIP,NORM),            X
+               INITIAL='4  -  DISPUTE ENTRY'
+         DFHMDF POS=(12,10),LENGTH=40,ATTRB=(ASKIP,NORM),            X
+               INITIAL='5  -  SETTLEMENT INQUIRY'
+*
+* OPTION ENTRY FIELD - VALIDATED IN P2100-EDIT-OPTION AGAINST
+* THE RANGE 1 THRU 5.  NUMERIC ATTRIBUTE REJECTS NON-DIGITS AT
+* THE 3270 KEYBOARD LEVEL BEFORE THE TRANSACTION EVER SEES THEM.
+         DFHMDF POS=(16,10),LENGTH=18,ATTRB=(ASKIP,NORM),            X
+               INITIAL='SELECT OPTION ===>'
+OPT      DFHMDF POS=(16,29),LENGTH=2,ATTRB=(UNPROT,IC,FSET,NUM),     X
+               PICIN='99',PICOUT='99'
+*
+         DFHMDF POS=(19,10),LENGTH=8,ATTRB=(ASKIP,NORM),             X
+               INITIAL='USERID: '
+USID     DFHMDF POS=(19,19),LENGTH=8,ATTRB=(ASKIP,NORM)
+*
+* MESSAGE LINE.  CARRIED FORWARD FROM CM-MSG-TEXT WHEN CONTROL
+* RETURNS FROM A LOWER SCREEN VIA PF3.
+         DFHMDF POS=(23,1),LENGTH=1,ATTRB=(ASKIP,NORM),INITIAL='*'
+MSGL     DFHMDF POS=(23,3),LENGTH=76,ATTRB=(ASKIP,BRT)
+*
+         DFHMDF POS=(24,1),LENGTH=79,ATTRB=(ASKIP,NORM),             X
+               INITIAL='PF3=EXIT  PF12=CANCEL  CLEAR=CLEAR SCREEN'
+*
+         DFHMSD TYPE=FINAL
+         END
+*
+*****************************************************************
+* FIELD INVENTORY - MAINTAINED BY HAND, NOT ASSEMBLER OUTPUT.   *
+* KEEP IN STEP WITH THE DFHMDF STATEMENTS ABOVE - CABS-STD-021  *
+* SECTION 3 REQUIRES THIS BLOCK ON EVERY MAPSET IN THE SUITE.   *
+*                                                                 *
+* FIELD    ROW  COL  LEN  I/O  NOTES                            *
+* CDAT      01   70    8   O   SYSTEM DATE, ASKTIME/FORMATTIME  *
+* CTIM      02   72    8   O   SYSTEM TIME                      *
+* OPT       16   29    2   I   MENU OPTION, NUMERIC, 1 THRU 5   *
+* USID      19   19    8   O   RACF USERID OF THE OPERATOR      *
+* MSGL      23   03   76   O   ONE LINE MESSAGE AREA            *
+*                                                                 *
+* UNNAMED LITERAL FIELDS (TITLE, MENU TEXT, PF LEGEND, BORDER)   *
+* CARRY NO SYMBOLIC MAP ENTRY AND ARE NOT LISTED ABOVE - THEY    *
+* ARE PART OF THE PHYSICAL MAP ONLY AND CANNOT BE CHANGED BY     *
+* CABONL01 AT RUN TIME.                                          *
+*                                                                 *
+* OPTION 6 (REPORTS) OCCUPIED ROW 14 BETWEEN 1998 AND 2003 -     *
+* THE ROW IS LEFT BLANK RATHER THAN REUSED, IN CASE THE OPTION   *
+* IS REINSTATED UNDER THE PANEL INVENTORY REVIEW.                *
+*****************************************************************
+

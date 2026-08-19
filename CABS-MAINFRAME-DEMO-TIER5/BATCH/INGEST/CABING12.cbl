@@ -1,0 +1,421 @@
+       IDENTIFICATION DIVISION.
+      *****************************************************************
+      * CABING12 - EMI 42-XX RECORD BRIDGE                            *
+      * APPLICATION : CABS                                            *
+      * INPUTS      : BRGIN   TELCABS.CABS.EMI.BRIDGE(0)    -         *
+      * OUTPUTS     : BRGOUT  TELCABS.CABS.EMI.BRIDGE.OUT(+1) CABSCDR *
+      * CONTROL     : CTLOUT                               CABSCTL    *
+      * BALANCE     : CT-READ = CT-WRITTEN + CT-REJECTED +            *
+      *               CT-SUMMARISED + CT-CARRIED-FWD (CT-SUMMARISED   *
+      *               AND CT-CARRIED-FWD ARE ALWAYS ZERO)             *
+      * RESTART     : FULL RERUN                                     *
+      * REVISION HISTORY                                              *
+      *   V1.00  1991-03-14  R.T.WHEELER  INITIAL BRIDGE - 42-01      *
+      *                      CATEGORY ONLY                            *
+      *   V1.01  1991-11-02  R.T.WHEELER  ADDED 42-50 CATEGORY        *
+      *                      SUPPORT AND SUSOUT SUSPENSE PATH FOR     *
+      *                      INVALID CATEGORY RECORDS                 *
+      *   V1.02  1993-05-20  D.OKONKWO    XLATE TABLE EXPANDED TO     *
+      *                      40 ENTRIES FOR NEW RATE ELEMENT CODES    *
+      *   V1.03  1995-02-08  D.OKONKWO    MESSAGE CODE VALIDATION     *
+      *                      TIGHTENED PER AUDIT FINDING 95-014       *
+      *   V1.04  1997-09-30  J.M.CASTILLO DURATION FIELD RANGE CHECK  *
+      *                      ADDED - REJECTS NEGATIVE DURATIONS       *
+      *   V1.05  1999-01-12  P.NAIR       Y2K REVIEW - NO CENTURY     *
+      *                      FIELDS IN THIS FEED, NO IMPACT           *
+      *   V1.06  2001-06-04  A.BUKOWSKI   RECOMPILE - LE V5           *
+      *                      MIGRATION, NO LOGIC CHANGE               *
+      *   V1.07  2004-08-19  S.MARCHETTI  JCL STEPLIB REORDERED FOR   *
+      *                      LE RUNTIME, NO SOURCE CHANGE             *
+      *****************************************************************
+       PROGRAM-ID.    CABING12.
+       AUTHOR.        RADIANT-DIGITAL-CABS-TEAM.
+       DATE-WRITTEN.  1991-03-14.
+       DATE-COMPILED.
+       ENVIRONMENT DIVISION.
+       CONFIGURATION SECTION.
+       SOURCE-COMPUTER.   IBM-370.
+       OBJECT-COMPUTER.   IBM-370.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT BRGIN   ASSIGN TO BRGIN
+               ORGANIZATION IS SEQUENTIAL
+               FILE STATUS  IS WS-FS-INPUT.
+           SELECT BRGOUT  ASSIGN TO BRGOUT
+               ORGANIZATION IS SEQUENTIAL
+               FILE STATUS  IS WS-FS-OUTPUT.
+           SELECT CTLOUT  ASSIGN TO CTLOUT
+               ORGANIZATION IS SEQUENTIAL
+               FILE STATUS  IS WS-FS-CONTROL.
+
+       DATA DIVISION.
+       FILE SECTION.
+      * EMI 42-XX BRIDGE RECORD - PRE-DIVESTITURE FEED LAYOUT.  NOT A
+      * SHARED COPYBOOK - THIS FORMAT IS UNIQUE TO THE BRIDGE FEED.
+       FD  BRGIN
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 150 CHARACTERS.
+       01  EM-BRIDGE-RECORD.
+           05  EM-HEADER-AREA           PIC X(20).
+           05  EM-OCN                   PIC X(04).
+           05  EM-BAN                   PIC X(13).
+           05  EM-SEQ                   PIC 9(09).
+           05  EM-CONN-YYDDD            PIC 9(05).
+           05  EM-CONN-HHMMSS           PIC 9(06).
+           05  EM-DISC-YYDDD            PIC 9(05).
+           05  EM-DISC-HHMMSS           PIC 9(06).
+           05  EM-ORIG-NPANXX           PIC 9(06).
+           05  EM-TERM-NPANXX           PIC 9(06).
+           05  EM-DURATION-MIN          PIC 9(05)V9(02).
+           05  EM-RATE-CLASS            PIC X(03).
+           05  EM-FILLER                PIC X(60).
+
+       FD  BRGOUT
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 200 CHARACTERS.
+       01  BRG-OUT-RECORD               PIC X(200).
+
+       FD  CTLOUT
+           RECORDING MODE IS F
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 180 CHARACTERS.
+       01  CTL-OUT-RECORD               PIC X(180).
+
+       WORKING-STORAGE SECTION.
+       COPY CABSWRK.
+
+      * OWN WORKING STORAGE FOLLOWS - CABSWRK SUPPLIES THE STANDARD
+      * SWITCHES, COUNTERS, ACCUMULATORS, FILE STATUS, ERROR CODES,
+      * SUSPENSE LAYOUT, DATE WORK AREA AND CONTROL RECORD.
+      * CABS-CDR-RECORD IS THE WORKING COPY THE BRIDGE RECORD IS
+      * REMAPPED INTO BEFORE IT IS WRITTEN TO BRGOUT.
+       COPY CABSCDR.
+
+       01  WS-PGM-CONSTANTS.
+           05  WS-PGM-NAME              PIC X(08) VALUE 'CABING12'.
+
+       01  WS-CYCLE-DATE-WORK.
+           05  WS-CYCLE-YYDDD           PIC 9(05).
+           05  WS-CYCLE-YYDDD-R REDEFINES WS-CYCLE-YYDDD.
+               10  WS-CYCLE-YY           PIC 9(02).
+               10  WS-CYCLE-DDD          PIC 9(03).
+
+      * CABS-STD-023 - THE 20-BYTE EMI HEADER IS SCANNED AS A BYTE
+      * TABLE VIA REDEFINES.  NO REFERENCE MODIFICATION IS USED
+      * ANYWHERE IN THIS PROGRAM - SEE P3000 AND P3100.
+       01  WS-HEADER-SCAN-WORK.
+           05  WS-HDR-SCAN-AREA         PIC X(20).
+           05  WS-HDR-BYTE-TABLE REDEFINES WS-HDR-SCAN-AREA.
+               10  WS-HDR-BYTE OCCURS 20 TIMES
+                                        PIC X(01).
+           05  WS-HDR-SUB               PIC S9(03) COMP-3.
+           05  WS-DASH-CNT              PIC S9(03) COMP-3.
+           05  WS-SPACE-CNT             PIC S9(03) COMP-3.
+
+      * HARDCODED POSITION ASSUMPTIONS: 1-2 CATEGORY MAJOR, 3-4
+      * CATEGORY MINOR, 5 DELIMITER, 6-9 MESSAGE CODE, 10 DELIMITER,
+      * 11-20 SPARE/STUDY FIELDS.  SEE P3000-DECODE-HEADER.
+       01  WS-CATEGORY-GROUP.
+           05  WS-CAT-MAJOR-GRP.
+               10  WS-CAT-MAJOR-CHAR OCCURS 2 TIMES
+                                        PIC X(01).
+           05  WS-CAT-MINOR-GRP.
+               10  WS-CAT-MINOR-CHAR OCCURS 2 TIMES
+                                        PIC X(01).
+           05  WS-MSG-CODE-GRP.
+               10  WS-MSG-CODE-CHAR OCCURS 4 TIMES
+                                        PIC X(01).
+
+       01  WS-CATEGORY-DISPLAY.
+           05  WS-CAT-MAJOR-DISP        PIC X(02).
+           05  WS-CAT-MINOR-DISP        PIC X(02).
+           05  WS-MSG-CODE-DISP         PIC X(04).
+
+       01  WS-MSG-CODE-VALID-WORK.
+           05  WS-MSG-BAD-CNT           PIC S9(03) COMP-3.
+           05  WS-MSG-VALID-SW          PIC X(01) VALUE 'Y'.
+               88  WS-MSG-VALID           VALUE 'Y'.
+
+      * CATEGORY-MINOR TO RATE-ELEMENT TRANSLATION TABLE - 40
+      * ENTRIES, LOADED VIA REDEFINES OF A LITERAL AREA, NOT
+      * INITIALIZE.  EACH ENTRY IS A 2-BYTE MINOR CODE FOLLOWED BY
+      * THE 6-BYTE RATE ELEMENT IT TRANSLATES TO.
+       01  WS-XLATE-LITERALS.
+          05  FILLER PIC X(32) VALUE '01OA100002TA100003LT100004TS1000'.
+          05  FILLER PIC X(32) VALUE '05CC100006SP100007UN100008RC1000'.
+          05  FILLER PIC X(32) VALUE '09OA100010TA100011LT100012TS1000'.
+          05  FILLER PIC X(32) VALUE '13CC100014SP100015UN100016RC1000'.
+          05  FILLER PIC X(32) VALUE '17OA100018TA100019LT100020TS1000'.
+          05  FILLER PIC X(32) VALUE '21CC100022SP100023UN100024RC1000'.
+          05  FILLER PIC X(32) VALUE '25OA100026TA100027LT100028TS1000'.
+          05  FILLER PIC X(32) VALUE '29CC100030SP100031UN100032RC1000'.
+          05  FILLER PIC X(32) VALUE '33OA100034TA100035LT100036TS1000'.
+          05  FILLER PIC X(32) VALUE '37CC100038SP100039UN100050RC1000'.
+       01  WS-XLATE-TABLE REDEFINES WS-XLATE-LITERALS.
+           05  WS-XL-ENTRY OCCURS 40 TIMES.
+               10  WS-XL-CODE            PIC X(02).
+               10  WS-XL-TARGET           PIC X(06).
+
+       01  WS-XLATE-SEARCH-WORK.
+           05  WS-XLATE-SUB             PIC S9(03) COMP-3.
+           05  WS-XLATE-FOUND-SW        PIC X(01) VALUE 'N'.
+               88  WS-XLATE-FOUND         VALUE 'Y'.
+
+       01  WS-EDIT-RESULT-WORK.
+           05  WS-REC-VALID-SW          PIC X(01) VALUE 'Y'.
+               88  WS-REC-VALID           VALUE 'Y'.
+
+       01  WS-CABDTCNV-PARMS.
+           05  CV-FUNCTION-CD           PIC X(01) VALUE '1'.
+           05  CV-YYDDD-IO              PIC 9(05).
+           05  CV-CCYYMMDD-IO           PIC 9(08).
+           05  CV-PIVOT-YY              PIC 9(02).
+           05  CV-RETURN-CD             PIC X(02).
+
+       01  WS-CABHASH-PARMS.
+           05  HS-HASH-SEQ-IN           PIC S9(09) COMP-3.
+           05  HS-HASH-OCN-IN           PIC X(04).
+
+       01  WS-CONTROL-BUILD-WORK.
+           05  WS-CTL-STEP-SAVE         PIC X(08) VALUE 'S200PROC'.
+
+       01  WS-ABEND-WORK.
+           05  WS-ABEND-CD              PIC X(04).
+           05  WS-ABEND-RSN             PIC X(40).
+
+       01  WS-MISC-FLAGS.
+           05  WS-DEBUG-SW              PIC X(01) VALUE 'N'.
+               88  WS-DEBUG-ON            VALUE 'Y'.
+
+       PROCEDURE DIVISION.
+
+       S000-MAINLINE SECTION.
+       P0000-MAINLINE.
+           PERFORM P1000-INIT THRU P1000-EXIT.
+           PERFORM P2000-PROCESS THRU P2000-EXIT
+               UNTIL WS-EOF.
+           PERFORM P8000-CONTROL THRU P8000-EXIT.
+           PERFORM P9000-TERM THRU P9000-EXIT.
+           STOP RUN.
+
+       S100-INIT SECTION.
+       P1000-INIT.
+           PERFORM P1100-OPEN-FILES THRU P1100-EXIT.
+           PERFORM P1200-INIT-CONTROL-KEY THRU P1200-EXIT.
+           PERFORM P2100-READ-BRGIN THRU P2100-EXIT.
+       P1000-EXIT.
+           EXIT.
+
+       P1100-OPEN-FILES.
+           OPEN INPUT  BRGIN.
+           OPEN OUTPUT BRGOUT.
+           OPEN OUTPUT CTLOUT.
+           IF WS-FS-INPUT NOT = '00'
+               MOVE 'I012' TO WS-ABEND-CD
+               MOVE 'CABING12 - BRGIN OPEN FAILED' TO WS-ABEND-RSN
+               CALL 'CABABEND' USING WS-ABEND-CD WS-ABEND-RSN.
+       P1100-EXIT.
+           EXIT.
+
+       P1200-INIT-CONTROL-KEY.
+           MOVE 'CABI12RUN001' TO CT-RUN-ID.
+           MOVE WS-PGM-NAME    TO CT-PROCESS-ID.
+           MOVE 1              TO CT-STEP-SEQ.
+           MOVE '1'            TO CV-FUNCTION-CD.
+           MOVE ZERO           TO CV-YYDDD-IO.
+           MOVE DW-PIVOT-YY    TO CV-PIVOT-YY.
+           CALL 'CABDTCNV' USING WS-CABDTCNV-PARMS.
+           MOVE CV-YYDDD-IO    TO WS-CYCLE-YYDDD.
+           MOVE WS-CYCLE-YYDDD TO CT-CYCLE-YYDDD.
+       P1200-EXIT.
+           EXIT.
+
+       S200-PROCESS SECTION.
+       P2000-PROCESS.
+           MOVE 'Y' TO WS-REC-VALID-SW.
+           PERFORM P3000-DECODE-HEADER THRU P3000-EXIT.
+           IF WS-CAT-MAJOR-DISP NOT = '42'
+               MOVE 'N' TO WS-REC-VALID-SW.
+           IF NOT WS-MSG-VALID
+               MOVE 'N' TO WS-REC-VALID-SW.
+           IF WS-REC-VALID
+               PERFORM P3200-XLATE-CATEGORY THRU P3200-EXIT
+               PERFORM P3300-REMAP-FIELDS THRU P3300-EXIT
+               PERFORM P3400-NORMALIZE-TIMESTAMPS THRU P3400-EXIT.
+           IF WS-REC-VALID
+               PERFORM P3900-WRITE-BRGOUT THRU P3900-EXIT
+           ELSE
+               ADD 1 TO WS-REJECT-CNT.
+           PERFORM P2100-READ-BRGIN THRU P2100-EXIT.
+       P2000-EXIT.
+           EXIT.
+
+       P2100-READ-BRGIN.
+           READ BRGIN
+               AT END
+                   MOVE 'Y' TO WS-EOF-SW
+               NOT AT END
+                   ADD 1 TO WS-READ-CNT.
+       P2100-EXIT.
+           EXIT.
+
+      * CABS-STD-023 - TALLIES THE DELIMITER COUNT FIRST, THEN
+      * WALKS THE HEADER BYTE BY BYTE VIA THE SUBSCRIPTED TABLE TO
+      * PULL OUT THE CATEGORY MAJOR/MINOR CELLS.  THE MESSAGE CODE
+      * ITSELF IS VALIDATED CELL BY CELL IN P3100 BELOW.
+       P3000-DECODE-HEADER.
+           MOVE EM-HEADER-AREA TO WS-HDR-SCAN-AREA.
+           MOVE ZERO TO WS-DASH-CNT WS-SPACE-CNT WS-MSG-BAD-CNT.
+           INSPECT WS-HDR-SCAN-AREA TALLYING
+               WS-DASH-CNT  FOR ALL '-'
+               WS-SPACE-CNT FOR ALL ' '.
+           MOVE WS-HDR-BYTE (1) TO WS-CAT-MAJOR-CHAR (1).
+           MOVE WS-HDR-BYTE (2) TO WS-CAT-MAJOR-CHAR (2).
+           MOVE WS-HDR-BYTE (3) TO WS-CAT-MINOR-CHAR (1).
+           MOVE WS-HDR-BYTE (4) TO WS-CAT-MINOR-CHAR (2).
+           MOVE WS-CAT-MAJOR-GRP TO WS-CAT-MAJOR-DISP.
+           MOVE WS-CAT-MINOR-GRP TO WS-CAT-MINOR-DISP.
+           MOVE 'Y' TO WS-MSG-VALID-SW.
+           PERFORM P3100-SCAN-MSG-CODE THRU P3100-EXIT
+               VARYING WS-HDR-SUB FROM 6 BY 1
+               UNTIL WS-HDR-SUB > 9.
+           MOVE WS-MSG-CODE-GRP TO WS-MSG-CODE-DISP.
+           IF WS-MSG-BAD-CNT > 0
+               MOVE 'N' TO WS-MSG-VALID-SW.
+       P3000-EXIT.
+           EXIT.
+
+      * WALKS HEADER BYTES 6 THRU 9 (THE MESSAGE CODE), COUNTING
+      * ANY CELL THAT IS NEITHER ALPHABETIC NOR NUMERIC AND COPYING
+      * EACH CELL INTO THE 4-CELL MESSAGE CODE GROUP.  NO REFERENCE
+      * MODIFICATION - EVERY CELL ACCESS IS A SUBSCRIPTED OCCURS.
+       P3100-SCAN-MSG-CODE.
+           IF WS-HDR-BYTE (WS-HDR-SUB) NOT ALPHABETIC
+               AND WS-HDR-BYTE (WS-HDR-SUB) NOT NUMERIC
+               ADD 1 TO WS-MSG-BAD-CNT.
+           IF WS-HDR-SUB = 6
+               MOVE WS-HDR-BYTE (WS-HDR-SUB) TO WS-MSG-CODE-CHAR (1).
+           IF WS-HDR-SUB = 7
+               MOVE WS-HDR-BYTE (WS-HDR-SUB) TO WS-MSG-CODE-CHAR (2).
+           IF WS-HDR-SUB = 8
+               MOVE WS-HDR-BYTE (WS-HDR-SUB) TO WS-MSG-CODE-CHAR (3).
+           IF WS-HDR-SUB = 9
+               MOVE WS-HDR-BYTE (WS-HDR-SUB) TO WS-MSG-CODE-CHAR (4).
+       P3100-EXIT.
+           EXIT.
+
+       P3200-XLATE-CATEGORY.
+           MOVE 'N' TO WS-XLATE-FOUND-SW.
+           PERFORM P3210-SEARCH-XLATE THRU P3210-EXIT
+               VARYING WS-XLATE-SUB FROM 1 BY 1
+               UNTIL WS-XLATE-SUB > 40
+               OR WS-XLATE-FOUND.
+           IF WS-XLATE-FOUND
+               MOVE WS-XL-TARGET (WS-XLATE-SUB) TO CD-RATE-ELEM
+           ELSE
+               MOVE 'UNKNWN' TO CD-RATE-ELEM.
+       P3200-EXIT.
+           EXIT.
+
+       P3210-SEARCH-XLATE.
+           IF WS-XL-CODE (WS-XLATE-SUB) = WS-CAT-MINOR-DISP
+               MOVE 'Y' TO WS-XLATE-FOUND-SW.
+       P3210-EXIT.
+           EXIT.
+
+      * FIELD-BY-FIELD REMAP FROM THE LEGACY BRIDGE LAYOUT TO THE
+      * MODERN CABSCDR LAYOUT.  LATA IS NOT CARRIED ON THE OLD FEED
+      * AND IS LEFT ZERO FOR THE DOWNSTREAM JURISDICTION PASS.
+       P3300-REMAP-FIELDS.
+           MOVE EM-OCN          TO CD-OCN.
+           MOVE EM-BAN          TO CD-BAN.
+           MOVE EM-SEQ          TO CD-SEQ-NBR.
+           MOVE '01'            TO CD-REC-TYPE.
+           MOVE 'V'             TO CD-USAGE-TYPE.
+           MOVE SPACE           TO CD-JURIS-CD.
+           MOVE EM-ORIG-NPANXX  TO CD-VC-ORIG-NPANXX.
+           MOVE EM-TERM-NPANXX  TO CD-VC-TERM-NPANXX.
+           MOVE ZERO            TO CD-VC-ORIG-LATA.
+           MOVE ZERO            TO CD-VC-TERM-LATA.
+           MOVE EM-DURATION-MIN TO CD-VC-CONV-MIN.
+           MOVE EM-DURATION-MIN TO CD-VC-CHG-MIN.
+           MOVE SPACES          TO CD-VC-TANDEM-IND.
+           MOVE SPACES          TO CD-VC-TRUNK-GRP.
+           MOVE ZERO            TO CD-VC-CIC.
+           MOVE SPACES          TO CD-VC-END-OFFICE.
+           MOVE SPACES          TO CD-VC-FILLER.
+           MOVE 'BRDG'          TO CD-SRC-SYSTEM.
+           MOVE WS-CYCLE-YYDDD  TO CD-LOAD-YYDDD.
+           MOVE ' '             TO CD-EDIT-STATUS.
+           MOVE SPACES          TO CD-FILLER.
+       P3300-EXIT.
+           EXIT.
+
+      * TIMESTAMPS ARRIVE ALREADY IN YYDDD FORM ON THIS FEED.
+      * CABDTCNV IS CALLED PURELY AS A VALIDITY CHECK ON THE
+      * CONNECT DATE - A NON-ZERO RETURN CODE FAILS THE RECORD.
+       P3400-NORMALIZE-TIMESTAMPS.
+           MOVE EM-CONN-YYDDD  TO CD-CONN-YYDDD.
+           MOVE EM-CONN-HHMMSS TO CD-CONN-HHMMSS.
+           MOVE EM-DISC-YYDDD  TO CD-DISC-YYDDD.
+           MOVE EM-DISC-HHMMSS TO CD-DISC-HHMMSS.
+           MOVE '1'            TO CV-FUNCTION-CD.
+           MOVE EM-CONN-YYDDD  TO CV-YYDDD-IO.
+           MOVE DW-PIVOT-YY    TO CV-PIVOT-YY.
+           CALL 'CABDTCNV' USING WS-CABDTCNV-PARMS.
+           IF CV-RETURN-CD NOT = '00'
+               MOVE 'N' TO WS-REC-VALID-SW.
+       P3400-EXIT.
+           EXIT.
+
+       P3900-WRITE-BRGOUT.
+           WRITE BRG-OUT-RECORD FROM CABS-CDR-RECORD.
+           ADD 1 TO WS-WRITE-CNT.
+           MOVE CD-SEQ-NBR TO HS-HASH-SEQ-IN.
+           MOVE CD-OCN     TO HS-HASH-OCN-IN.
+           CALL 'CABHASH' USING WS-ACC-SEQ-HASH HS-HASH-SEQ-IN
+                                 WS-ACC-OCN-HASH HS-HASH-OCN-IN.
+           ADD CD-VC-CONV-MIN TO WS-ACC-MINUTES.
+       P3900-EXIT.
+           EXIT.
+
+       S800-CONTROL SECTION.
+       P8000-CONTROL.
+           MOVE WS-PGM-NAME      TO CT-JOBNAME.
+           MOVE WS-CTL-STEP-SAVE TO CT-STEPNAME.
+           MOVE ZERO             TO CT-BILL-PERIOD.
+           MOVE ZERO             TO CT-RERUN-NBR.
+           MOVE WS-READ-CNT      TO CT-READ.
+           MOVE WS-WRITE-CNT     TO CT-WRITTEN.
+           MOVE WS-REJECT-CNT    TO CT-REJECTED.
+           MOVE ZERO             TO CT-SUMMARISED.
+           MOVE ZERO             TO CT-CARRIED-FWD.
+           MOVE WS-ACC-MINUTES   TO CT-HASH-MINUTES.
+           MOVE WS-ACC-AMOUNT    TO CT-HASH-AMOUNT.
+           MOVE WS-ACC-SEQ-HASH  TO CT-HASH-SEQ.
+           MOVE WS-ACC-OCN-HASH  TO CT-HASH-OCN.
+           IF CT-READ = CT-WRITTEN + CT-REJECTED
+                        + CT-SUMMARISED + CT-CARRIED-FWD
+               MOVE 'B' TO CT-BAL-IND
+           ELSE
+               MOVE 'O' TO CT-BAL-IND.
+           MOVE ZERO   TO CT-RC.
+           MOVE SPACES TO CT-ABEND-CD.
+           MOVE SPACES TO CT-RESTART-KEY.
+           MOVE SPACES TO CT-FILLER.
+           WRITE CTL-OUT-RECORD FROM CABS-CONTROL-RECORD.
+       P8000-EXIT.
+           EXIT.
+
+       S900-TERM SECTION.
+       P9000-TERM.
+           CLOSE BRGIN.
+           CLOSE BRGOUT.
+           CLOSE CTLOUT.
+       P9000-EXIT.
+           EXIT.

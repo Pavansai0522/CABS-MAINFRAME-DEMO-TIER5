@@ -1,0 +1,273 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CABSXBAL.
+      *****************************************************************
+      * CABSXBAL - SORT E15 INPUT EXIT - OUT OF BALANCE CONTROL       *
+      *            RECORD SELECTION                                   *
+      * APPLICATION : CABS                                            *
+      * COMPILER    : ENTERPRISE COBOL                                *
+      * INVOKED BY  : OS SORT/MERGE, MODS STATEMENT ON CONTROL CARD   *
+      *               MEMBER JCL/CTLCARDS/MVT/CABSRT08 -              *
+      *               E15=(CABSXBAL,4096,SORTEXIT,N)                  *
+      * INPUTS      : ONE 180 BYTE CABS-CONTROL-RECORD PER ENTRY,     *
+      *               FROM THE DAY'S CTLOUT GENERATIONS               *
+      * OUTPUTS     : THE SAME RECORD UNCHANGED, OR A DELETE REPLY    *
+      * CONTROL     : NONE - EXITS DO NOT WRITE CTLOUT, CABS-STD-041  *
+      * BALANCE     : SORTIN = WS-KEPT-CNT + WS-DROP-CNT              *
+      * RESTART     : NOT RESTARTABLE - RERUN THE WHOLE SORT STEP     *
+      *                                                               *
+      * LINKAGE CONVENTION                                            *
+      *   SORT PASSES REGISTER 1 POINTING AT A TWO WORD PARAMETER     *
+      *   LIST.  WORD ONE IS THE ADDRESS OF THE INPUT RECORD, OR      *
+      *   BINARY ZERO WHEN THE INPUT DATA SET IS EXHAUSTED.  WORD     *
+      *   TWO IS THE ADDRESS OF THE RECORD LENGTH HALFWORD AND IS     *
+      *   NOT REFERENCED FOR FIXED LENGTH INPUT.  THE EXIT REPLIES    *
+      *   IN THE RETURN-CODE SPECIAL REGISTER -                       *
+      *     00  NO ACTION - SORT TAKES THE RECORD UNCHANGED           *
+      *     04  DELETE THE RECORD                                     *
+      *     08  RETURN THE ALTERED RECORD ADDRESSED BY WORD ONE       *
+      *     12  DO NOT ENTER THIS EXIT AGAIN                          *
+      *     16  TERMINATE THE SORT WITH A USER COMPLETION CODE        *
+      *   WORKING STORAGE PERSISTS FOR THE LIFE OF THE SORT STEP.     *
+      *                                                               *
+      * WHAT THIS EXIT DECIDES                                        *
+      *   THE CARD CARRIED THE SELECTION UNTIL THE MOVE TO THE MVT    *
+      *   CONTROL CARD FORMAT.  IT IS NOW HERE.  ONLY CONTROL         *
+      *   RECORDS THAT DID NOT BALANCE REACH SORTOUT, WHICH IS        *
+      *   WHAT CABCTLRP EXPECTS - A CLEAN DAY PRODUCES NO OUTPUT      *
+      *   RECORDS AT ALL.                                             *
+      *   THE CARD TESTED THE SINGLE BYTE AT COLUMN 40 FOR NOT B.     *
+      *   THIS MODULE TESTS THE NAMED CT-BAL-IND FIELD AND ITS        *
+      *   CONDITION NAMES.  THAT IS A WIDENING OF THE TEST AND NOT    *
+      *   A NARROWING - EVERY RECORD THE CARD KEPT IS STILL KEPT,     *
+      *   AND A RECORD WHOSE INDICATOR IS BLANK OR HOLDS SOME         *
+      *   OTHER VALUE IS KEPT AS WELL AND COUNTED ON ITS OWN LINE.    *
+      *                                                               *
+      * REVISION HISTORY                                              *
+      *   V1.00  1988-10-24  R.T.WHEELER   INITIAL - ASSEMBLER F      *
+      *   V1.04  1994-05-09  D.OKONKWO     RETURN CODE BANDS ADDED    *
+      *                                    TO THE MESSAGE DATA SET    *
+      *   V1.09  1999-08-31  P.NAIR        BALANCING EQUATION         *
+      *                                    RECHECKED IN THE EXIT      *
+      *   V2.00  2006-07-17  L.FERREIRA    RECODED IN COBOL FOR LE    *
+      *   V2.03  2014-02-06  B.R.HALVORSEN SEVERITY CARRIED ON THE    *
+      *                                    CONTROL RECORD             *
+      *   V2.05  2019-02-11  J.CALLAGHAN   SELECTION MOVED OFF THE    *
+      *                                    CONTROL CARD               *
+      *****************************************************************
+       ENVIRONMENT DIVISION.
+       CONFIGURATION SECTION.
+       SOURCE-COMPUTER. IBM-370.
+       OBJECT-COMPUTER. IBM-370.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+      *
+      * THIS EXIT WRITES NO CONTROL RECORD OF ITS OWN.  THE
+      * BALANCE OF CABCTLRP, WHICH READS SORTOUT, IS UNAFFECTED
+      * BY THIS MODULE - IT REPORTS WHAT IT READS AS ITS OWN
+      * CT-READ.  COUNTERS SURVIVE FROM ONE ENTRY TO THE NEXT.
+      *
+       01  WS-MODULE-IDENT.
+           05  FILLER                  PIC X(08) VALUE 'CABSXBAL'.
+           05  FILLER                  PIC X(08) VALUE ' V2.05  '.
+       01  WS-COUNTERS.
+           05  WS-ENTRY-CNT            PIC S9(11) COMP-3 VALUE 0.
+           05  WS-KEPT-CNT             PIC S9(11) COMP-3 VALUE 0.
+           05  WS-DROP-CNT             PIC S9(11) COMP-3 VALUE 0.
+           05  WS-IND-B-CNT            PIC S9(11) COMP-3 VALUE 0.
+           05  WS-IND-O-CNT            PIC S9(11) COMP-3 VALUE 0.
+           05  WS-IND-BLANK-CNT        PIC S9(11) COMP-3 VALUE 0.
+           05  WS-IND-OTHER-CNT        PIC S9(11) COMP-3 VALUE 0.
+           05  WS-EQN-AGREE-CNT        PIC S9(11) COMP-3 VALUE 0.
+           05  WS-EQN-DIFFER-CNT       PIC S9(11) COMP-3 VALUE 0.
+           05  WS-PROCESS-CNT          PIC S9(09) COMP-3 VALUE 0.
+       01  WS-SWITCHES.
+           05  WS-FIRST-ENTRY-SW       PIC X(01) VALUE 'Y'.
+               88  WS-FIRST-ENTRY      VALUE 'Y'.
+           05  WS-EOF-SEEN-SW          PIC X(01) VALUE 'N'.
+               88  WS-EOF-SEEN         VALUE 'Y'.
+           05  WS-BAND-FOUND-SW        PIC X(01) VALUE 'N'.
+               88  WS-BAND-FOUND       VALUE 'Y'.
+      *
+      * THE RETURN CODE BANDS.  EACH ENTRY CARRIES THE HIGHEST
+      * CT-RC THAT BELONGS TO IT, SO THE TABLE IS AN ASCENDING
+      * LIST OF UPPER LIMITS AND NOT A LIST OF KEYS.  SEARCH ALL
+      * MATCHES AN EXACT KEY, SO THE TABLE IS WALKED INSTEAD AND
+      * THE FIRST LIMIT THE RETURN CODE DOES NOT EXCEED WINS.
+      *
+       01  WS-BAND-LITERALS.
+           05  FILLER  PIC X(16) VALUE '0000CLEAN       '.
+           05  FILLER  PIC X(16) VALUE '0003WARNING     '.
+           05  FILLER  PIC X(16) VALUE '0007ERROR       '.
+           05  FILLER  PIC X(16) VALUE '0015SEVERE      '.
+           05  FILLER  PIC X(16) VALUE '0099ABEND       '.
+           05  FILLER  PIC X(16) VALUE '9999OUT OF RANGE'.
+       01  WS-BAND-TABLE REDEFINES WS-BAND-LITERALS.
+           05  WS-BAND-ENTRY OCCURS 6 TIMES INDEXED BY WS-BX.
+               10  WS-BAND-LIMIT       PIC 9(04).
+               10  WS-BAND-NAME        PIC X(12).
+       01  WS-BAND-COUNTS.
+           05  WS-BAND-CNT OCCURS 6 TIMES PIC S9(11) COMP-3
+                                                  VALUE 0.
+       01  WS-BAND-MAX                 PIC S9(04) COMP VALUE 6.
+       01  WS-WORK-FIELDS.
+           05  WS-BAND-SUB             PIC S9(04) COMP VALUE 6.
+           05  WS-PX                   PIC S9(04) COMP VALUE 0.
+           05  WS-EQN-TOTAL            PIC S9(11) COMP-3 VALUE 0.
+           05  WS-LAST-PROCESS         PIC X(08) VALUE SPACES.
+      *
+      * THE INPUT RECORD IS THE STANDARD CONTROL RECORD.  THE
+      * LAYOUT IS TAKEN FROM THE FROZEN COPYBOOK RATHER THAN
+      * HAND MAINTAINED HERE, WHICH IS WHY THE CONDITION NAMES ON
+      * CT-BAL-IND ARE AVAILABLE TO THIS MODULE.
+      *
+       LINKAGE SECTION.
+       01  LK-PARM-LIST.
+           05  LK-RECORD-PTR           POINTER.
+           05  LK-LENGTH-PTR           POINTER.
+       COPY CABSCTL.
+      *
+       PROCEDURE DIVISION USING LK-PARM-LIST.
+       P0000-MAINLINE.
+           PERFORM P1000-INIT THRU P1000-EXIT.
+           IF LK-RECORD-PTR = NULL
+               PERFORM P8000-END-OF-INPUT THRU P8000-EXIT
+               GOBACK
+           END-IF.
+           SET ADDRESS OF CABS-CONTROL-RECORD TO LK-RECORD-PTR.
+           ADD 1 TO WS-ENTRY-CNT.
+           PERFORM P2000-COUNT-INDICATOR THRU P2000-EXIT.
+           PERFORM P3000-BAND-RETURN-CODE THRU P3000-EXIT.
+           PERFORM P4000-RECHECK-EQUATION THRU P4000-EXIT.
+           PERFORM P5000-APPLY-RULE THRU P5000-EXIT.
+           GOBACK.
+
+       P1000-INIT.
+      * ENTERED ONCE PER RECORD.  ONLY THE FIRST ENTRY DOES ANY
+      * SET UP - EVERY LATER ENTRY FALLS STRAIGHT THROUGH.
+           MOVE ZERO TO RETURN-CODE.
+           IF WS-FIRST-ENTRY
+               MOVE 'N' TO WS-FIRST-ENTRY-SW
+               MOVE SPACES TO WS-LAST-PROCESS
+               DISPLAY 'CABSXBAL ENTERED - EXCEPTION SELECTION'
+           END-IF.
+
+       P1000-EXIT.
+           EXIT.
+
+       P2000-COUNT-INDICATOR.
+      * THE INDICATOR IS COUNTED BEFORE THE DECISION IS TAKEN, SO
+      * THE PROFILE AT END OF INPUT COVERS EVERY CONTROL RECORD
+      * THE DAY PRODUCED AND NOT ONLY THE EXCEPTIONS.
+           IF CT-IN-BALANCE
+               ADD 1 TO WS-IND-B-CNT
+               GO TO P2000-EXIT
+           END-IF.
+           IF CT-OUT-OF-BAL
+               ADD 1 TO WS-IND-O-CNT
+               GO TO P2000-EXIT
+           END-IF.
+           IF CT-NOT-CHECKED
+               ADD 1 TO WS-IND-BLANK-CNT
+               GO TO P2000-EXIT
+           END-IF.
+           ADD 1 TO WS-IND-OTHER-CNT.
+
+       P2000-EXIT.
+           EXIT.
+
+       P3000-BAND-RETURN-CODE.
+      * PUT THE RECORD IN A RETURN CODE BAND.  THE LAST BAND
+      * CARRIES THE HIGHEST LIMIT, SO A WALK THAT REACHES THE END
+      * OF THE TABLE WITHOUT A MATCH CANNOT HAPPEN AND THE
+      * SUBSCRIPT IS PRESET TO THAT BAND IN ANY CASE.
+           MOVE 'N' TO WS-BAND-FOUND-SW.
+           MOVE 6 TO WS-BAND-SUB.
+           PERFORM P3200-BAND-TEST THRU P3200-EXIT
+                   VARYING WS-BX FROM 1 BY 1
+                   UNTIL WS-BX > WS-BAND-MAX
+                      OR WS-BAND-FOUND.
+           ADD 1 TO WS-BAND-CNT (WS-BAND-SUB).
+
+       P3000-EXIT.
+           EXIT.
+
+       P3200-BAND-TEST.
+           IF CT-RC NOT > WS-BAND-LIMIT (WS-BX)
+               MOVE 'Y' TO WS-BAND-FOUND-SW
+               SET WS-BAND-SUB TO WS-BX
+           END-IF.
+
+       P3200-EXIT.
+           EXIT.
+
+       P4000-RECHECK-EQUATION.
+      * CABS-STD-041 SAYS CT-READ EQUALS CT-WRITTEN PLUS
+      * CT-REJECTED PLUS CT-SUMMARISED PLUS CT-CARRIED-FWD.  THE
+      * SUM IS RECOMPUTED HERE AND THE RESULT IS COUNTED FOR THE
+      * MESSAGE DATA SET.  IT IS NOT USED TO DECIDE ANYTHING -
+      * THE INDICATOR ON THE RECORD IS WHAT SELECTS THE RECORD.
+           COMPUTE WS-EQN-TOTAL = CT-WRITTEN + CT-REJECTED
+                                + CT-SUMMARISED + CT-CARRIED-FWD.
+           IF WS-EQN-TOTAL = CT-READ
+               ADD 1 TO WS-EQN-AGREE-CNT
+           ELSE
+               ADD 1 TO WS-EQN-DIFFER-CNT
+           END-IF.
+           IF CT-PROCESS-ID = WS-LAST-PROCESS
+               GO TO P4000-EXIT
+           END-IF.
+           ADD 1 TO WS-PROCESS-CNT.
+           MOVE CT-PROCESS-ID TO WS-LAST-PROCESS.
+
+       P4000-EXIT.
+           EXIT.
+
+       P5000-APPLY-RULE.
+      * THE ONE RULE THIS EXIT ENFORCES.  A RECORD WHOSE
+      * INDICATOR SAYS IT BALANCED IS REMOVED.  EVERYTHING ELSE
+      * REACHES SORTOUT, INCLUDING A RECORD THAT WAS NEVER
+      * CHECKED, BECAUSE AN UNCHECKED RUN IS AN EXCEPTION THE
+      * RECONCILIATION REPORT IS MEANT TO SHOW.
+           IF CT-IN-BALANCE
+               ADD 1 TO WS-DROP-CNT
+               MOVE 4 TO RETURN-CODE
+               GO TO P5000-EXIT
+           END-IF.
+           ADD 1 TO WS-KEPT-CNT.
+           MOVE ZERO TO RETURN-CODE.
+
+       P5000-EXIT.
+           EXIT.
+
+       P8000-END-OF-INPUT.
+      * A NULL RECORD ADDRESS MEANS SORTIN IS EXHAUSTED.  THE
+      * EXIT HAS NOTHING TO INSERT, SO IT REPLIES ZERO AND
+      * WRITES ITS TALLIES TO THE MESSAGE DATA SET.  A DAY ON
+      * WHICH EVERY RUN BALANCED SHOWS KEPT AS ZERO.
+           MOVE 'Y' TO WS-EOF-SEEN-SW.
+           DISPLAY 'CABSXBAL ENTRIES     ' WS-ENTRY-CNT.
+           DISPLAY 'CABSXBAL KEPT        ' WS-KEPT-CNT.
+           DISPLAY 'CABSXBAL REMOVED     ' WS-DROP-CNT.
+           DISPLAY 'CABSXBAL IND BALANCED' WS-IND-B-CNT.
+           DISPLAY 'CABSXBAL IND OUT     ' WS-IND-O-CNT.
+           DISPLAY 'CABSXBAL IND BLANK   ' WS-IND-BLANK-CNT.
+           DISPLAY 'CABSXBAL IND OTHER   ' WS-IND-OTHER-CNT.
+           DISPLAY 'CABSXBAL EQN AGREES  ' WS-EQN-AGREE-CNT.
+           DISPLAY 'CABSXBAL EQN DIFFERS ' WS-EQN-DIFFER-CNT.
+           DISPLAY 'CABSXBAL PROCESSES   ' WS-PROCESS-CNT.
+           PERFORM P8200-BAND-LINE THRU P8200-EXIT
+                   VARYING WS-PX FROM 1 BY 1
+                   UNTIL WS-PX > WS-BAND-MAX.
+           MOVE ZERO TO RETURN-CODE.
+
+       P8000-EXIT.
+           EXIT.
+
+       P8200-BAND-LINE.
+      * ONE LINE PER RETURN CODE BAND, IN ASCENDING LIMIT ORDER.
+           DISPLAY 'CABSXBAL BAND        '
+                   WS-BAND-NAME (WS-PX) ' '
+                   WS-BAND-CNT (WS-PX).
+
+       P8200-EXIT.
+           EXIT.

@@ -1,0 +1,40 @@
+//CABS2200 JOB (CABS,BILL),'MEET POINT SETTLEMENT',
+//             CLASS=B,MSGCLASS=X,MSGLEVEL=(1,1),
+//             NOTIFY=&SYSUID,REGION=0M,TIME=1440
+//*****************************************************************
+//* CABS2200 - MEET POINT BILLING SETTLEMENT CALCULATION          *
+//*                                                               *
+//* THE MEET POINT CALCULATOR.  READS THE CABS BILLED DETAIL      *
+//* FILE DIRECTLY - THE SETTLEMENT RUN CANNOT START UNTIL THE     *
+//* BILLING RUN HAS RELEASED IT AND NOTHING IN EITHER SCHEDULE    *
+//* ENFORCES THAT ORDER.                                          *
+//* READ ACCESS GRANTED UNDER THE 1991 INTERFACE AGREEMENT.       *
+//* SEARCH ORDER PER CABS-STD-024 - DO NOT REORDER.               *
+//* OVERRIDE CONVENTIONS PER CABS-STD-024.                        *
+//*****************************************************************
+//STEP010  EXEC CABPSETL,
+//             PGMNAME=CABSET01,
+//             CYCLE=%%CYCLDT,
+//             BILLPER=%%BILLPR,
+//             RUNID=%%RUNID,
+//             SETPER=%%SETPER,
+//             TARIFF=%%TARIFF,
+//             MINAMT=%%MINAMT,
+//             REGION1=%%REGION,
+//             SIMSW=N,
+//             INGDG='0'
+//*
+//* THE BILLED DETAIL FILE IS TAKEN FROM THE GENERATION THE
+//* BILLING CYCLE CREATED LAST NIGHT.  IF BILLING RERAN, THIS
+//* PICKS UP THE RERUN AND NOT THE ORIGINAL.
+//*
+//SETLSTEP.BILLDTL DD DSN=TELCABS.CABS.BILLDTL(0),DISP=SHR
+//SETLSTEP.MPBVAL  DD DSN=TELCABS.SETL.MPB.VALID(0),DISP=SHR
+//SETLSTEP.SETLOUT DD DSN=TELCABS.SETL.SETTLE.MPB(+1),
+//             DISP=(NEW,CATLG,DELETE),
+//             UNIT=SYSDA,SPACE=(CYL,(60,30),RLSE),
+//             DCB=(RECFM=FB,LRECL=180,BLKSIZE=0)
+//SETLSTEP.SYSIN   DD *
+RN%%RUNID  %%CYCLDT%%BILLPR00CABS2200SETLSTEPNN%%SETPER%%TARIFF
+/*
+//

@@ -1,0 +1,150 @@
+/* REXX */
+/*********************************************************************/
+/* CABCMPDS - COMPARE TWO SEQUENTIAL DATASETS RECORD BY RECORD       */
+/* APPLICATION : CABS | SETL                                        */
+/* INPUTS      : DSN1, DSN2 AND AN OPTIONAL KEYED OFFSET, VIA ARG    */
+/* OUTPUTS     : SYSTSPRT - FIRST 100 DIFFERENCES, THEN A SUMMARY    */
+/* CONTROL     : NONE                                                */
+/* RESTART     : RERUNNABLE - READ ONLY AGAINST BOTH DATASETS        */
+/*                                                                    */
+/* GENERAL PURPOSE DATASET COMPARE, WRITTEN FOR PARALLEL RUN         */
+/* VERIFICATION WHEN A RATING OR SETTLEMENT PROGRAM IS RECOMPILED.   */
+/* WITHOUT A KEY OFFSET IT COMPARES WHOLE RECORDS POSITIONALLY.      */
+/* WITH A KEY OFFSET AND LENGTH IT MATCHES RECORDS BY KEY FIRST SO   */
+/* AN INSERTED OR DELETED RECORD PARTWAY THROUGH DOES NOT CASCADE    */
+/* INTO A FALSE MISMATCH ON EVERY RECORD AFTER IT.                   */
+/*                                                                    */
+/* REVISION HISTORY                                                  */
+/*   V1.00  1993-11-02  P.NAIR        INITIAL - POSITIONAL ONLY      */
+/*   V1.02  1998-07-15  P.NAIR        KEYED OFFSET COMPARE ADDED     */
+/*   V1.03  2002-09-24  R.OKONKWO     DIFFERENT RECORD COUNT HANDLING*/
+/*                                    - PREVIOUSLY STOPPED AT EOF OF */
+/*                                    THE SHORTER FILE SILENTLY      */
+/*   V1.04  2013-05-30  A.BUKOWSKI    100 DIFFERENCE CAP ADDED - A   */
+/*                                    MISMATCHED LRECL PAIR ONCE     */
+/*                                    FILLED SYSTSPRT AND LOOPED THE */
+/*                                    JOB INTO A TIME ABEND          */
+/*********************************************************************/
+
+PARSE ARG DSN1 DSN2 KEYOFF KEYLEN .
+
+IF DSN1 = '' | DSN2 = '' THEN DO
+  SAY 'CABCMPDS - USAGE: EX CABCMPDS DSN1 DSN2 [KEYOFF KEYLEN]'
+  SAY '           KEYOFF/KEYLEN ARE 1-BASED, WHOLE RECORD COMPARED'
+  SAY '           WHEN OMITTED.'
+  EXIT 16
+END
+
+KEYED = (KEYOFF \= '')
+IF KEYED THEN DO
+  IF KEYLEN = '' THEN DO
+    SAY 'CABCMPDS - KEYLEN REQUIRED WHEN KEYOFF IS SUPPLIED'
+    EXIT 16
+  END
+END
+
+ADDRESS TSO
+
+"ALLOC F(CMPIN1) DA('"DSN1"') SHR REUSE"
+IF RC <> 0 THEN DO
+  SAY 'CABCMPDS - ALLOC FAILED ON' DSN1 'RC='RC
+  EXIT RC
+END
+"ALLOC F(CMPIN2) DA('"DSN2"') SHR REUSE"
+IF RC <> 0 THEN DO
+  SAY 'CABCMPDS - ALLOC FAILED ON' DSN2 'RC='RC
+  "FREE F(CMPIN1)"
+  EXIT RC
+END
+
+"EXECIO * DISKR CMPIN1 (STEM R1. FINIS)"
+"EXECIO * DISKR CMPIN2 (STEM R2. FINIS)"
+"FREE F(CMPIN1) F(CMPIN2)"
+
+SAY 'CABCMPDS - COMPARING' DSN1 '('R1.0 'RECORDS) TO' DSN2,
+    '('R2.0 'RECORDS)'
+IF KEYED THEN
+  SAY '           KEYED COMPARE ON OFFSET' KEYOFF 'LENGTH' KEYLEN
+ELSE
+  SAY '           POSITIONAL WHOLE-RECORD COMPARE'
+
+DIFFCNT = 0
+CAPPED = 'N'
+
+IF \KEYED THEN DO
+  /*-----------------------------------------------------------------*/
+  /* POSITIONAL COMPARE - RECORD N OF FILE1 AGAINST RECORD N OF      */
+  /* FILE2.  WHEN THE COUNTS DIFFER, THE SHORTER FILE'S MISSING TAIL */
+  /* IS REPORTED AS A SEPARATE BLOCK RATHER THAN AS MISMATCHES.      */
+  /*-----------------------------------------------------------------*/
+  MAXN = MIN(R1.0,R2.0)
+  DO I = 1 TO MAXN
+    IF R1.I \= R2.I THEN DO
+      DIFFCNT = DIFFCNT + 1
+      IF DIFFCNT <= 100 THEN DO
+        SAY 'DIFF AT RECORD' I
+        SAY '  FILE1:' R1.I
+        SAY '  FILE2:' R2.I
+      END
+      ELSE CAPPED = 'Y'
+    END
+  END
+END
+ELSE DO
+  /*-----------------------------------------------------------------*/
+  /* KEYED COMPARE.  BUILD A LOOKUP OF FILE2 BY KEY, THEN WALK       */
+  /* FILE1 IN ARRIVAL ORDER SO THE REPORT FOLLOWS FILE1'S SEQUENCE.  */
+  /*-----------------------------------------------------------------*/
+  DROP K2.
+  DO J = 1 TO R2.0
+    KVAL = SUBSTR(R2.J,KEYOFF,KEYLEN)
+    IF SYMBOL('K2.KVAL') = 'VAR' THEN
+      SAY 'CABCMPDS - WARNING - DUPLICATE KEY IN FILE2:' KVAL
+    K2.KVAL = R2.J
+    K2SEEN.KVAL = 'Y'
+  END
+
+  DO I = 1 TO R1.0
+    KVAL = SUBSTR(R1.I,KEYOFF,KEYLEN)
+    IF SYMBOL('K2.KVAL') \= 'VAR' THEN DO
+      DIFFCNT = DIFFCNT + 1
+      IF DIFFCNT <= 100 THEN
+        SAY 'KEY' KVAL 'ON FILE1 RECORD' I 'NOT FOUND ON FILE2'
+      ELSE CAPPED = 'Y'
+      ITERATE
+    END
+    IF R1.I \= K2.KVAL THEN DO
+      DIFFCNT = DIFFCNT + 1
+      IF DIFFCNT <= 100 THEN DO
+        SAY 'DIFF ON KEY' KVAL
+        SAY '  FILE1:' R1.I
+        SAY '  FILE2:' K2.KVAL
+      END
+      ELSE CAPPED = 'Y'
+    END
+    K2MATCHED.KVAL = 'Y'
+  END
+
+  DO J = 1 TO R2.0
+    KVAL = SUBSTR(R2.J,KEYOFF,KEYLEN)
+    IF SYMBOL('K2MATCHED.KVAL') \= 'VAR' THEN DO
+      DIFFCNT = DIFFCNT + 1
+      IF DIFFCNT <= 100 THEN
+        SAY 'KEY' KVAL 'ON FILE2 RECORD' J 'NOT FOUND ON FILE1'
+      ELSE CAPPED = 'Y'
+    END
+  END
+END
+
+IF R1.0 \= R2.0 THEN
+  SAY 'CABCMPDS - RECORD COUNTS DIFFER -' DSN1 '='R1.0 DSN2 '='R2.0
+
+IF CAPPED = 'Y' THEN
+  SAY 'CABCMPDS - MORE THAN 100 DIFFERENCES FOUND - LIST CAPPED AT 100'
+
+SAY 'CABCMPDS - TOTAL DIFFERENCES:' DIFFCNT
+
+IF DIFFCNT = 0 & R1.0 = R2.0 THEN
+  EXIT 0
+ELSE
+  EXIT 4

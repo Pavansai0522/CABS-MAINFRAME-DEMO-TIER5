@@ -1,0 +1,38 @@
+//CABPBILL PROC PGMNAME=,CYCLE=,BILLPER=,RUNID=,RERUN=00,
+//             JOBNM=,STEPNM=BILLSTEP,OPT1=N,OPT2=N,
+//             INGDG='0',OUTGDG='+1',
+//             LOADLIB=TELCABS.CABS.LOADLIB
+//*****************************************************************
+//* CABPBILL - GENERIC BILL CALCULATION STEP                      *
+//*                                                               *
+//* USED BY CABS4000, CABS4200, CABS4450 AND CABS4600.  EVERY ONE *
+//* OF THEM OVERRIDES AT LEAST TWO DD STATEMENTS BECAUSE THE      *
+//* GENERIC STEP ONLY CARRIES THE DD NAMES THAT EVERY BILLCALC    *
+//* PROGRAM HAS.                                                  *
+//*                                                               *
+//* THE STEPLIB IS FIVE DEEP.  EMERG IS FIRST SO THAT A FIX CAN   *
+//* BE PUT IN FRONT OF THE PRODUCTION LIBRARY WITHOUT A PROMOTION.*
+//* LIBRARY ORDER IS OWNED BY OPERATIONS SUPPORT.                 *
+//*****************************************************************
+//BILLSTEP EXEC PGM=&PGMNAME,REGION=8M,
+//             PARM='&CYCLE.&BILLPER'
+//STEPLIB  DD DSN=TELCABS.CABS.EMERG.LOADLIB,DISP=SHR
+//         DD DSN=&LOADLIB,DISP=SHR
+//         DD DSN=TELCABS.SETL.LOADLIB,DISP=SHR
+//         DD DSN=TELCABS.COMMON.LOADLIB,DISP=SHR
+//         DD DSN=SYS1.COB2LIB,DISP=SHR
+//CTLOUT   DD DSN=TELCABS.CABS.CONTROL(&OUTGDG),
+//             DISP=(MOD,CATLG,DELETE),
+//             UNIT=SYSDA,SPACE=(TRK,(5,5),RLSE),
+//             DCB=(RECFM=FB,LRECL=180,BLKSIZE=0)
+//SUSPOUT  DD DSN=TELCABS.CABS.BILL.SUSP(&OUTGDG),
+//             DISP=(MOD,CATLG,DELETE),
+//             UNIT=SYSDA,SPACE=(TRK,(15,15),RLSE),
+//             DCB=(RECFM=FB,LRECL=300,BLKSIZE=0)
+//REPORT   DD SYSOUT=*
+//SYSOUT   DD SYSOUT=*
+//SYSUDUMP DD SYSOUT=D
+//SYSIN    DD *
+RN&RUNID.&CYCLE.&BILLPER.&RERUN.&JOBNM.&STEPNM.&OPT1.&OPT2
+/*
+//         PEND

@@ -1,0 +1,35 @@
+//CABS2700 JOB (CABS,BILL),'CMDS INBOUND EXCHANGE',
+//             CLASS=A,MSGCLASS=X,MSGLEVEL=(1,1),
+//             NOTIFY=&SYSUID,REGION=0M,TIME=1440
+//*****************************************************************
+//* CABS2700 - CMDS RAO INBOUND EXCHANGE                          *
+//*                                                               *
+//* SECOND USE OF THE CMDS FRAGMENT.  THE INBOUND JOB PASSES AN   *
+//* EXPECTED RAO AND A FILE SEQUENCE AND OVERRIDES BOTH THE       *
+//* INPUT AND THE OUTPUT DD STATEMENTS COMPLETELY - THE PROC      *
+//* WAS WRITTEN FOR THE OUTBOUND DIRECTION AND THE INBOUND JOB    *
+//* REUSES IT BY OVERRIDE.                                        *
+//* PROC LIBRARY MEMBERS ARE OWNED BY OPERATIONS SUPPORT.         *
+//* DD OVERRIDES ARE AGREED WITH OPERATIONS SUPPORT.              *
+//*****************************************************************
+//STEP010  EXEC CABPCMDS,
+//             PGMNAME=CABSET08,
+//             CYCLE=%%CYCLDT,
+//             BILLPER=%%BILLPR,
+//             RUNID=%%RUNID,
+//             EXCHDT=%%EXCHDT,
+//             EXPRAO=%%EXPRAO,
+//             FILESEQ=%%FILSEQ,
+//             INGDG='0'
+//*
+//CMDSSTEP.SETLIN  DD DUMMY,DCB=(RECFM=FB,LRECL=180,BLKSIZE=1800)
+//CMDSSTEP.CMDSIN  DD DSN=TELCABS.SETL.CMDS.IN(0),DISP=SHR
+//CMDSSTEP.CMDSOUT DD DUMMY,DCB=(RECFM=FB,LRECL=180,BLKSIZE=1800)
+//CMDSSTEP.SETLADD DD DSN=TELCABS.SETL.SETTLE.ADD(+1),
+//             DISP=(NEW,CATLG,DELETE),
+//             UNIT=SYSDA,SPACE=(CYL,(10,5),RLSE),
+//             DCB=(RECFM=FB,LRECL=180,BLKSIZE=0)
+//CMDSSTEP.SYSIN   DD *
+RN%%RUNID  %%CYCLDT%%BILLPR00CABS2700CMDSSTEPNN%%EXPRAO%%FILSEQ
+/*
+//

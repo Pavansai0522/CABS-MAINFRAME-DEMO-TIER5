@@ -1,0 +1,233 @@
+{
+ "contract_version": "1.0",
+ "asset": "CABS Tier 5 wholesale access billing reference estate",
+ "purpose": "Declares what is compared, how records are keyed, which REDEFINES overlay is decoded, where a tolerance is permitted and why, and how the control chain is expected to hold. This file is an input to the comparison. It contains no answers.",
+ "principles": [
+  "Decimal comparison is exact by default. A tolerance exists only where this file declares one, and every declared tolerance carries a reason.",
+  "A key must be a business key, not a physical one. Record position is not a key.",
+  "Exactly one REDEFINES overlay is decoded per record. The variant_rule says which.",
+  "Filler and variant-area group items are excluded from field comparison because the overlay already covers those bytes; they are still compared as bytes at L1 through the record hash."
+ ],
+ "parameters": {
+  "cycle_start": "24245",
+  "cycle_end": "24274",
+  "bill_period": 240901,
+  "band_boundaries": [50000, 100000, 250000, 500000, 1000000, 2500000, 5000000],
+  "note": "cycle_start/cycle_end are YYDDD. Override with --cycle-start / --cycle-end on run_compare.py when comparing a different cycle."
+ },
+ "datasets": [
+  {
+   "name": "USAGE.RAW",
+   "description": "Raw wholesale access usage, one GDG generation per day. DD RAWIN on CABING01.",
+   "pattern": "TELCABS.CABS.USAGE.RAW.*.dat",
+   "layout": "CABSCDR",
+   "recfm": "FB",
+   "lrecl": 200,
+   "levels": ["L1", "L2"],
+   "key": ["CD-OCN", "CD-BAN", "CD-SEQ-NBR"],
+   "variant_rule": {
+    "field": "CD-REC-TYPE",
+    "map": {
+     "01": "CD-VOICE-DETAIL",
+     "02": "CD-VOICE-DETAIL",
+     "03": "CD-VOICE-DETAIL",
+     "04": "CD-DATA-DETAIL",
+     "05": "CD-SPCL-DETAIL",
+     "06": "CD-SPCL-DETAIL",
+     "07": "CD-SPCL-DETAIL",
+     "08": "CD-VOICE-DETAIL"
+    },
+    "default": "CD-VOICE-DETAIL",
+    "note": "CD-REC-TYPE '03' satisfies both CD-VOICE-MOU and CD-DATA-SVC, and '05' satisfies both CD-DATA-SVC and CD-SPECIAL-ACC. The 88-levels overlap in the frozen copybook. This mapping resolves the ambiguity the same way for both sides, which is the only way the comparison can be meaningful; that the ambiguity exists at all is a finding for the modernization, recorded here rather than hidden."
+   },
+   "ignore_fields": [
+    "CD-VARIANT-AREA",
+    "CD-FILLER",
+    "CD-VC-FILLER",
+    "CD-DT-FILLER",
+    "CD-SP-FILLER"
+   ],
+   "witness_fields": [
+    "CD-REC-TYPE",
+    "CD-RATE-ELEM",
+    "CD-JURIS-CD",
+    "CD-EDIT-STATUS",
+    "CD-VC-TANDEM-IND",
+    "CD-CONN-YYDDD",
+    "CD-SRC-SYSTEM"
+   ],
+   "tolerances": {},
+   "tolerance_note": "None. Usage quantities are exact. A sub-unit tolerance here would hide exactly the class of difference this level exists to find, which is how such differences survive in a production estate."
+  },
+  {
+   "name": "USAGE.CLEAN",
+   "description": "The billable usage stream leaving CABING05.",
+   "pattern": "TELCABS.CABS.USAGE.CLEAN.*.dat",
+   "layout": "CABSCDR",
+   "recfm": "FB",
+   "lrecl": 200,
+   "levels": ["L1", "L2"],
+   "key": ["CD-OCN", "CD-BAN", "CD-SEQ-NBR"],
+   "variant_rule": {
+    "field": "CD-REC-TYPE",
+    "map": {
+     "01": "CD-VOICE-DETAIL",
+     "02": "CD-VOICE-DETAIL",
+     "03": "CD-VOICE-DETAIL",
+     "04": "CD-DATA-DETAIL",
+     "05": "CD-SPCL-DETAIL",
+     "06": "CD-SPCL-DETAIL",
+     "07": "CD-SPCL-DETAIL",
+     "08": "CD-VOICE-DETAIL"
+    },
+    "default": "CD-VOICE-DETAIL"
+   },
+   "ignore_fields": ["CD-VARIANT-AREA", "CD-FILLER", "CD-VC-FILLER", "CD-DT-FILLER", "CD-SP-FILLER"],
+   "witness_fields": ["CD-REC-TYPE", "CD-RATE-ELEM", "CD-EDIT-STATUS", "CD-VC-TANDEM-IND", "CD-CONN-YYDDD"],
+   "tolerances": {}
+  },
+  {
+   "name": "USAGE.RATED",
+   "description": "Rated usage leaving the RATING family.",
+   "pattern": "TELCABS.CABS.RATED.*.dat",
+   "layout": "CABSCDR",
+   "recfm": "FB",
+   "lrecl": 200,
+   "levels": ["L1", "L2"],
+   "key": ["CD-OCN", "CD-BAN", "CD-SEQ-NBR"],
+   "variant_rule": {
+    "field": "CD-REC-TYPE",
+    "map": {
+     "01": "CD-VOICE-DETAIL",
+     "02": "CD-VOICE-DETAIL",
+     "03": "CD-VOICE-DETAIL",
+     "04": "CD-DATA-DETAIL",
+     "05": "CD-SPCL-DETAIL",
+     "06": "CD-SPCL-DETAIL",
+     "07": "CD-SPCL-DETAIL",
+     "08": "CD-VOICE-DETAIL"
+    },
+    "default": "CD-VOICE-DETAIL"
+   },
+   "ignore_fields": ["CD-VARIANT-AREA", "CD-FILLER", "CD-VC-FILLER", "CD-DT-FILLER", "CD-SP-FILLER"],
+   "witness_fields": ["CD-REC-TYPE", "CD-RATE-ELEM", "CD-EDIT-STATUS", "CD-VC-TANDEM-IND", "CD-CONN-YYDDD"],
+   "tolerances": {}
+  },
+  {
+   "name": "CONTROL",
+   "description": "Run control and balancing records, written by every process at every boundary.",
+   "pattern": "TELCABS.CABS.CONTROL.*.dat",
+   "layout": "CABSCTL",
+   "recfm": "FB",
+   "lrecl": 180,
+   "levels": ["L1", "L2", "L3"],
+   "key": ["CT-RUN-ID", "CT-PROCESS-ID", "CT-STEP-SEQ"],
+   "ignore_fields": ["CT-FILLER"],
+   "witness_fields": ["CT-PROCESS-ID", "CT-JOBNAME", "CT-BAL-IND", "CT-RC"],
+   "tolerances": {}
+  },
+  {
+   "name": "BILLHDR",
+   "description": "Invoice header. The record the bill-to-bill comparison keys on.",
+   "pattern": "TELCABS.CABS.BILLHDR*.dat",
+   "layout": "CABSBHDR",
+   "recfm": "FB",
+   "lrecl": 400,
+   "levels": ["L1", "L2", "L4"],
+   "key": ["BH-BAN", "BH-BILL-PERIOD"],
+   "ignore_fields": ["BH-FILLER"],
+   "witness_fields": ["BH-OCN", "BH-STATUS", "BH-HOLD-REASON", "BH-ADJUSTMENTS", "BH-RESTATEMENT"],
+   "tolerances": {},
+   "tolerance_note": "None, deliberately. The estate's own account-level proof applies a tolerance to itself; reproducing that tolerance here would reproduce whatever it has been absorbing and leave this level unable to fail."
+  },
+  {
+   "name": "BILLDTL",
+   "description": "Bill detail lines, variable length, OCCURS DEPENDING ON BD-ELEM-CNT.",
+   "pattern": "TELCABS.CABS.BILLDTL*.dat",
+   "layout": "CABSBILL",
+   "recfm": "VB",
+   "levels": ["L1", "L2", "L4"],
+   "key": ["BD-BAN", "BD-BILL-PERIOD", "BD-SECTION", "BD-LINE-SEQ"],
+   "ignore_fields": [],
+   "witness_fields": ["BD-OCN", "BD-JURIS-CD", "BD-STATE-CD", "BD-ELEM-CNT"],
+   "tolerances": {}
+  },
+  {
+   "name": "SETTLEMENT",
+   "description": "Inter-carrier settlement records: meet point, reciprocal compensation and CMDS/RAO. The pattern deliberately excludes TELCABS.SETL.CMDS.IN, which is the 180-byte industry exchange format declared in CABSET07/CABSET08 working storage rather than in a copybook; it has no CABSSETL layout and is reconciled by its own HD/TR trailer totals, not here.",
+   "pattern": "TELCABS.SETL.[MSRWDN]*.dat",
+   "layout": "CABSSETL",
+   "recfm": "FB",
+   "lrecl": 186,
+   "levels": ["L1", "L2", "L5"],
+   "key": ["ST-SETTLE-TYPE", "ST-COUNTERPARTY-OCN", "ST-SETTLE-PERIOD", "ST-SEQ"],
+   "ignore_fields": ["ST-FILLER"],
+   "witness_fields": ["ST-SETTLE-TYPE", "ST-DIRECTION", "ST-DISPUTE-SW", "ST-CAPPED-MOU", "ST-CIRCUIT-ID"],
+   "tolerances": {}
+  }
+ ],
+ "l3": {
+  "balancing_equation": "CT-READ = CT-WRITTEN + CT-REJECTED + CT-SUMMARISED + CT-CARRIED-FWD",
+  "assert_on_both_sides": true,
+  "note": "An out-of-balance legacy run is a finding about the legacy. It is not a reason to skip the assertion, and CT-BAL-IND = 'O' being routine in operations is not a reason either.",
+  "process_chain": [
+   {"from": "GENUSAGE", "to": "CABING01", "source_field": "CT-WRITTEN", "target_field": "CT-READ",
+    "carried_hashes": ["CT-HASH-SEQ", "CT-HASH-OCN"],
+    "note": "the generator declares what it produced; CABING01 must read exactly that"},
+   {"from": "CABING01", "to": "CABING02", "source_field": "CT-WRITTEN", "target_field": "CT-READ",
+    "carried_hashes": ["CT-HASH-SEQ"]},
+   {"from": "CABING02", "to": "CABING03", "source_field": "CT-WRITTEN", "target_field": "CT-READ",
+    "carried_hashes": ["CT-HASH-SEQ"]},
+   {"from": "CABING03", "to": "CABING04", "source_field": "CT-WRITTEN", "target_field": "CT-READ"},
+   {"from": "CABING04", "to": "CABING05", "source_field": "CT-WRITTEN", "target_field": "CT-READ"},
+   {"from": "CABING05", "to": "CABING06", "source_field": "CT-WRITTEN", "target_field": "CT-READ",
+    "note": "CABING05 writes the clean stream. If the count on either side of this edge is inflated the edge breaks, which is the point of declaring it."},
+   {"from": "CABING06", "to": "CABING10", "source_field": "CT-WRITTEN", "target_field": "CT-READ"},
+   {"from": "CABING10", "to": "CABRAT01", "source_field": "CT-WRITTEN", "target_field": "CT-READ",
+    "carried_hashes": ["CT-HASH-MINUTES"]},
+   {"from": "CABRAT03", "to": "CABRAT06", "source_field": "CT-WRITTEN", "target_field": "CT-READ",
+    "carried_hashes": ["CT-HASH-MINUTES", "CT-HASH-AMOUNT"]},
+   {"from": "CABRAT09", "to": "CABBIL01", "source_field": "CT-WRITTEN", "target_field": "CT-READ",
+    "carried_hashes": ["CT-HASH-AMOUNT"],
+    "note": "the summary sort sits between these two and writes no control record; a divergence arising in that gap has no control record on either side to expose it"},
+   {"from": "CABBIL09", "to": "CABBIL10", "source_field": "CT-WRITTEN", "target_field": "CT-READ",
+    "carried_hashes": ["CT-HASH-AMOUNT"]},
+   {"from": "CABBIL11", "to": "CABBIL12", "source_field": "CT-WRITTEN", "target_field": "CT-READ"},
+   {"from": "CABBIL12", "to": "CABFMT01", "source_field": "CT-WRITTEN", "target_field": "CT-READ"},
+   {"from": "CABSET04", "to": "CABSET05", "source_field": "CT-WRITTEN", "target_field": "CT-READ",
+    "carried_hashes": ["CT-HASH-MINUTES"]},
+   {"from": "CABSET05", "to": "CABSET09", "source_field": "CT-WRITTEN", "target_field": "CT-READ",
+    "carried_hashes": ["CT-HASH-AMOUNT"]}
+  ]
+ },
+ "l4": {
+  "header_layout": "CABSBHDR",
+  "detail_layout": "CABSBILL",
+  "header_money_fields": [
+   "BH-PRIOR-BAL", "BH-PAYMENTS", "BH-ADJUSTMENTS", "BH-CURR-USAGE",
+   "BH-CURR-RECURRING", "BH-CURR-NONRECUR", "BH-RESTATEMENT",
+   "BH-SETTLEMENT-NET", "BH-TAX", "BH-TOTAL-DUE",
+   "BH-INTERSTATE-AMT", "BH-INTRASTATE-AMT", "BH-LOCAL-AMT",
+   "BH-HASH-AMOUNT", "BH-DETAIL-LINES", "BH-CDR-COUNT"
+  ],
+  "detail_money_fields": ["BD-TOT-MINUTES", "BD-TOT-AMOUNT", "BD-TOT-ROUNDED", "BD-ROUND-DELTA"],
+  "groupings": ["invoice", "carrier", "ban", "line_item", "rate_element"],
+  "note": "BH-HASH-AMOUNT carries five decimals and BD-TOT-ROUNDED carries two. They are compared separately and never against each other: comparing two different precisions under a tolerance is how a control stops being able to fail."
+ },
+ "l5": {
+  "layout": "CABSSETL",
+  "money_fields": [
+   "ST-TOTAL-MOU", "ST-BILLABLE-MOU", "ST-CAPPED-MOU", "ST-GROSS-AMT",
+   "ST-OUR-SHARE", "ST-THEIR-SHARE", "ST-NET-DUE", "ST-ROUND-RESIDUE"
+  ],
+  "assertions": [
+   "ST-OUR-PCT + ST-THEIR-PCT = 100.00000 for every meet-point record",
+   "ST-OUR-SHARE + ST-THEIR-SHARE = ST-GROSS-AMT for every meet-point record"
+  ],
+  "note": "Both assertions are needed. The split reconciling is not evidence that the percentages are right -- CABSET01 makes the split reconcile by adjusting our percentage."
+ },
+ "reporting": {
+  "max_reported_per_level": 2000,
+  "note": "A cap on what is listed, not on what is counted. The stats block always reports the full count and flags truncation."
+ }
+}

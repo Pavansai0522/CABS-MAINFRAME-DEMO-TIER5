@@ -1,0 +1,300 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CABSXLDG.
+      *****************************************************************
+      * CABSXLDG - SORT E15 INPUT EXIT - LEDGER COMPANY PREFIX        *
+      * APPLICATION : CABS                                            *
+      * COMPILER    : ENTERPRISE COBOL                                *
+      * INVOKED BY  : OS SORT/MERGE, MODS E15=(CABSXLDG,4096)         *
+      *               ON CONTROL CARD MEMBER                          *
+      *               JCL/CTLCARDS/MVT/CABSRT17                       *
+      * INPUTS      : ONE 400 BYTE INVOICE HEADER PER ENTRY FROM      *
+      *               TELCABS.CABS.INVOICE.HDR                        *
+      * OUTPUTS     : ONE 402 BYTE RECORD - THE SAME HEADER WITH      *
+      *               THE TWO BYTE LEDGER COMPANY IN FRONT OF IT      *
+      * CONTROL     : NONE - EXITS DO NOT WRITE CTLOUT, CABS-STD-041  *
+      * BALANCE     : SORTIN = RECORDS RETURNED, NOTHING IS DROPPED   *
+      * RESTART     : NOT RESTARTABLE - RERUN THE WHOLE SORT STEP     *
+      *                                                               *
+      * LINKAGE CONVENTION                                            *
+      *   SORT PASSES REGISTER 1 POINTING AT A TWO WORD PARAMETER     *
+      *   LIST.  WORD ONE IS THE ADDRESS OF THE INPUT RECORD, OR      *
+      *   BINARY ZERO WHEN THE INPUT DATA SET IS EXHAUSTED.  WORD     *
+      *   TWO IS THE ADDRESS OF THE RECORD LENGTH HALFWORD.  THE      *
+      *   EXIT REPLIES IN THE RETURN-CODE SPECIAL REGISTER -          *
+      *     00  NO ACTION - SORT TAKES THE RECORD UNCHANGED           *
+      *     04  DELETE THE RECORD                                     *
+      *     08  RETURN THE ALTERED RECORD ADDRESSED BY WORD ONE       *
+      *     12  DO NOT ENTER THIS EXIT AGAIN                          *
+      *     16  TERMINATE THE SORT WITH A USER COMPLETION CODE        *
+      *   THIS IS ONE OF THE FEW EXITS IN THE ESTATE THAT CHANGES     *
+      *   THE LENGTH OF THE RECORD, SO WORD TWO IS NOT LEFT ALONE     *
+      *   HERE.  THE HALFWORD IT ADDRESSES IS SET TO 402 BEFORE THE   *
+      *   REPLY OF 08 IS GIVEN, AND THE CONTROL CARD CARRIES          *
+      *   RECORD TYPE=F,LENGTH=(402) TO AGREE WITH IT.  AN EXIT       *
+      *   THAT RETURNS A LONGER RECORD WITHOUT UPDATING THE LENGTH    *
+      *   WORD LEAVES SORT WORKING ON THE OLD LENGTH.                 *
+      *   WORKING STORAGE PERSISTS FOR THE LIFE OF THE SORT STEP.     *
+      *                                                               *
+      * WHAT THIS EXIT DECIDES                                        *
+      *   THE MONTH END CLOSE IS TAKEN BY LEDGER COMPANY.  THE        *
+      *   LEDGER COMPANY IS NOT A FIELD ON THE INVOICE HEADER - IT    *
+      *   IS THE FIRST TWO BYTES OF THE INVOICE NUMBER AT POSITION    *
+      *   24, WHICH IS THE PREFIX CABBIL12 PUT THERE.  THOSE TWO      *
+      *   BYTES ARE MOVED TO THE FRONT OF THE RECORD SO THAT THE      *
+      *   SORT CAN KEY ON THEM.  EVERY OTHER FIELD MOVES RIGHT BY     *
+      *   TWO BYTES, WHICH IS WHY THE BILL PERIOD KEY ON THE          *
+      *   CONTROL CARD IS QUOTED AT 17 AND NOT AT 15.                 *
+      *   THE RESHAPE WAS CARRIED AS AN INREC OPERAND ON THE          *
+      *   CONTROL CARD UNTIL THE STEP WAS MOVED TO A SORT THAT HAS    *
+      *   NO INREC STATEMENT.  CABSXLDR TAKES THE PREFIX BACK OFF     *
+      *   ON THE WAY OUT.                                             *
+      *   THE CALLING PROGRAM'S BALANCE IS UNAFFECTED BY THIS         *
+      *   MODULE - A SORT STEP WRITES NO CONTROL RECORD OF ITS OWN.   *
+      *                                                               *
+      * REVISION HISTORY                                              *
+      *   V1.00  1992-08-17  D.OKONKWO     INITIAL - ASSEMBLER F      *
+      *   V1.02  1996-04-02  J.CALLAGHAN   LEDGER 04 ADDED FOR THE    *
+      *                                    SOUTHERN PROPERTIES        *
+      *   V1.04  2000-01-19  B.R.HALVORSEN BLANK PREFIX FORCED TO     *
+      *                                    00 RATHER THAN ABENDED     *
+      *   V2.00  2007-06-08  P.NAIR        RECODED IN COBOL FOR LE    *
+      *   V2.02  2013-09-24  S.MBEKI       LEDGER 07 AND 08 ADDED     *
+      *   V2.04  2018-10-16  M.HAAS        RECOMPILE ONLY - LE V6.2   *
+      *****************************************************************
+       ENVIRONMENT DIVISION.
+       CONFIGURATION SECTION.
+       SOURCE-COMPUTER. IBM-370.
+       OBJECT-COMPUTER. IBM-370.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-MODULE-IDENT.
+           05  FILLER                  PIC X(08) VALUE 'CABSXLDG'.
+           05  FILLER                  PIC X(08) VALUE ' V2.04  '.
+       01  WS-SWITCHES.
+           05  WS-FIRST-ENTRY-SW       PIC X(01) VALUE 'Y'.
+               88  WS-FIRST-ENTRY      VALUE 'Y'.
+           05  WS-EOF-SEEN-SW          PIC X(01) VALUE 'N'.
+               88  WS-EOF-SEEN         VALUE 'Y'.
+           05  WS-LEDGER-FOUND-SW      PIC X(01) VALUE 'N'.
+               88  WS-LEDGER-FOUND     VALUE 'Y'.
+       01  WS-COUNTERS.
+           05  WS-ENTRY-CNT            PIC S9(11) COMP-3 VALUE 0.
+           05  WS-RETURN-CNT           PIC S9(11) COMP-3 VALUE 0.
+           05  WS-PREFIX-BLANK         PIC S9(09) COMP-3 VALUE 0.
+           05  WS-PREFIX-NOT-NUM       PIC S9(09) COMP-3 VALUE 0.
+           05  WS-LEDGER-UNKNOWN       PIC S9(09) COMP-3 VALUE 0.
+           05  WS-LEDGER-CHANGES       PIC S9(07) COMP-3 VALUE 0.
+       01  WS-VALUES.
+           05  WS-TOTAL-DUE            PIC S9(15)V9(02) COMP-3
+                                                  VALUE 0.
+           05  WS-CURR-CHARGE          PIC S9(15)V9(02) COMP-3
+                                                  VALUE 0.
+      *
+      * THE LEDGER COMPANIES THE CLOSE RECOGNISES.  THE LIST IS
+      * HELD IN ASCENDING ORDER SO THE LOOKUP IS A SEARCH ALL.  A
+      * PREFIX THAT IS NOT IN THE LIST IS STILL MOVED TO THE FRONT
+      * AND STILL SORTED ON - IT IS COUNTED HERE AND SORTS TO
+      * WHATEVER POSITION ITS TWO BYTES PUT IT IN.
+      *
+       01  WS-LEDGER-CONST.
+           05  FILLER  PIC X(22) VALUE '01NORTHERN OPERATIONS'.
+           05  FILLER  PIC X(22) VALUE '02EASTERN OPERATIONS '.
+           05  FILLER  PIC X(22) VALUE '03CENTRAL OPERATIONS '.
+           05  FILLER  PIC X(22) VALUE '04SOUTHERN PROPERTIES'.
+           05  FILLER  PIC X(22) VALUE '05MOUNTAIN HOLDINGS  '.
+           05  FILLER  PIC X(22) VALUE '06PACIFIC OPERATIONS '.
+           05  FILLER  PIC X(22) VALUE '07WHOLESALE SERVICES '.
+           05  FILLER  PIC X(22) VALUE '08NETWORK SERVICES   '.
+       01  WS-LEDGER-TABLE REDEFINES WS-LEDGER-CONST.
+           05  WS-LG-ENTRY OCCURS 8 TIMES
+                    ASCENDING KEY IS WS-LG-CODE
+                    INDEXED BY WS-LX.
+               10  WS-LG-CODE          PIC X(02).
+               10  WS-LG-NAME          PIC X(20).
+       01  WS-LEDGER-TALLY.
+           05  WS-LG-INV-CNT OCCURS 8 TIMES
+                                       PIC S9(09) COMP-3.
+       01  WS-SUBSCRIPTS.
+           05  WS-SX                   PIC S9(04) COMP VALUE 0.
+           05  WS-LEDGER-HIT           PIC S9(04) COMP VALUE 0.
+       01  WS-WORK-FIELDS.
+           05  WS-TEST-PREFIX          PIC X(02) VALUE SPACES.
+           05  WS-LAST-PREFIX          PIC X(02) VALUE SPACES.
+           05  WS-BLANK-TALLY          PIC S9(04) COMP VALUE 0.
+      *
+      * THE 402 BYTE WORK RECORD.  IT IS THE AREA HANDED BACK TO
+      * SORT, SO IT MUST STAY ADDRESSABLE BETWEEN ENTRIES.
+      *
+       01  WS-LEDGER-RECORD.
+           05  WS-LR-PREFIX            PIC X(02) VALUE SPACES.
+           05  WS-LR-BODY              PIC X(400) VALUE SPACES.
+      *
+       LINKAGE SECTION.
+       01  LK-PARM-LIST.
+           05  LK-RECORD-PTR           POINTER.
+           05  LK-LENGTH-PTR           POINTER.
+       01  LK-LENGTH-WORD.
+           05  LK-REC-LENGTH           PIC S9(04) COMP.
+      *
+      * A HAND MAINTAINED VIEW OF THE 400 BYTE INVOICE HEADER AS IT
+      * ARRIVES.  THE INVOICE NUMBER STARTS AT 24 AND ITS FIRST TWO
+      * BYTES ARE THE LEDGER COMPANY.
+      *
+       01  LK-SORT-RECORD.
+           05  LK-IH-BAN               PIC X(13).
+           05  LK-IH-INV-TYPE          PIC X(01).
+           05  LK-IH-BILL-PERIOD       PIC 9(06).
+           05  LK-IH-STATE-CD          PIC X(02).
+           05  LK-IH-MEDIA-CD          PIC X(01).
+           05  LK-IH-INVOICE-NBR.
+               10  LK-IH-LEDGER-CO     PIC X(02).
+               10  LK-IH-INV-SERIAL    PIC X(10).
+           05  LK-IH-OCN               PIC X(04).
+           05  LK-IH-RAO               PIC 9(03).
+           05  LK-IH-CUST-NAME         PIC X(30).
+           05  LK-IH-INV-YYDDD         PIC 9(05).
+           05  LK-IH-DUE-YYDDD         PIC 9(05).
+           05  LK-IH-CURR-CHG          PIC S9(11)V9(02) COMP-3.
+           05  LK-IH-PRIOR-BAL         PIC S9(11)V9(02) COMP-3.
+           05  LK-IH-PAYMENTS          PIC S9(11)V9(02) COMP-3.
+           05  LK-IH-ADJUSTMENTS       PIC S9(11)V9(02) COMP-3.
+           05  LK-IH-TAX-AMT           PIC S9(09)V9(02) COMP-3.
+           05  LK-IH-TOTAL-DUE         PIC S9(11)V9(02) COMP-3.
+           05  LK-IH-TAIL              PIC X(277).
+      *
+       PROCEDURE DIVISION USING LK-PARM-LIST.
+       P0000-MAINLINE.
+           PERFORM P1000-INIT THRU P1000-EXIT.
+           IF LK-RECORD-PTR = NULL
+               PERFORM P8000-END-OF-INPUT THRU P8000-EXIT
+               GOBACK
+           END-IF.
+           SET ADDRESS OF LK-SORT-RECORD TO LK-RECORD-PTR.
+           SET ADDRESS OF LK-LENGTH-WORD TO LK-LENGTH-PTR.
+           ADD 1 TO WS-ENTRY-CNT.
+           PERFORM P2000-DERIVE-PREFIX THRU P2000-EXIT.
+           PERFORM P3000-BUILD-RECORD THRU P3000-EXIT.
+           PERFORM P4000-RETURN-RECORD THRU P4000-EXIT.
+           GOBACK.
+
+       P1000-INIT.
+      * ENTERED ONCE PER RECORD.  ONLY THE FIRST ENTRY DOES ANY
+      * SET UP - EVERY LATER ENTRY FALLS STRAIGHT THROUGH.  THE PER
+      * LEDGER TALLY IS CLEARED HERE BECAUSE AN OCCURS WITH A
+      * COMP-3 ITEM CANNOT CARRY A VALUE CLAUSE.
+           MOVE ZERO TO RETURN-CODE.
+           IF WS-FIRST-ENTRY
+               MOVE 'N' TO WS-FIRST-ENTRY-SW
+               PERFORM P1200-CLEAR-TALLY THRU P1200-EXIT
+                       VARYING WS-SX FROM 1 BY 1
+                       UNTIL WS-SX > 8
+               DISPLAY 'CABSXLDG ENTERED - LEDGER COMPANY PREFIX'
+           END-IF.
+
+       P1000-EXIT.
+           EXIT.
+
+       P1200-CLEAR-TALLY.
+           MOVE ZERO TO WS-LG-INV-CNT (WS-SX).
+
+       P1200-EXIT.
+           EXIT.
+
+       P2000-DERIVE-PREFIX.
+      * TAKE THE FIRST TWO BYTES OF THE INVOICE NUMBER.  A HEADER
+      * WHOSE INVOICE NUMBER HAS NOT BEEN ASSIGNED CARRIES SPACES
+      * THERE.  THOSE ARE SET TO 00 SO THEY GROUP TOGETHER AT THE
+      * FRONT OF THE SORTED FILE RATHER THAN SCATTERING.
+           MOVE LK-IH-LEDGER-CO TO WS-TEST-PREFIX.
+           MOVE ZERO TO WS-BLANK-TALLY.
+           INSPECT WS-TEST-PREFIX TALLYING WS-BLANK-TALLY
+                   FOR ALL SPACE.
+           IF WS-BLANK-TALLY = 2
+               MOVE '00' TO WS-TEST-PREFIX
+               ADD 1 TO WS-PREFIX-BLANK
+               GO TO P2200-LOOK-UP
+           END-IF.
+           IF WS-TEST-PREFIX NOT NUMERIC
+               ADD 1 TO WS-PREFIX-NOT-NUM
+           END-IF.
+
+       P2200-LOOK-UP.
+      * THE LEDGER LIST IS SHORT AND IS HELD IN ASCENDING CODE
+      * ORDER, SO A SEARCH ALL IS USED.  A CODE THAT IS NOT FOUND
+      * IS COUNTED AND STILL GOES THROUGH.
+           MOVE 'N' TO WS-LEDGER-FOUND-SW.
+           MOVE ZERO TO WS-LEDGER-HIT.
+           SEARCH ALL WS-LG-ENTRY
+               AT END
+                   ADD 1 TO WS-LEDGER-UNKNOWN
+               WHEN WS-LG-CODE (WS-LX) = WS-TEST-PREFIX
+                   MOVE 'Y' TO WS-LEDGER-FOUND-SW
+                   SET WS-LEDGER-HIT TO WS-LX
+           END-SEARCH.
+           IF WS-LEDGER-FOUND
+               ADD 1 TO WS-LG-INV-CNT (WS-LEDGER-HIT)
+           END-IF.
+           IF WS-TEST-PREFIX NOT = WS-LAST-PREFIX
+               ADD 1 TO WS-LEDGER-CHANGES
+               MOVE WS-TEST-PREFIX TO WS-LAST-PREFIX
+           END-IF.
+
+       P2000-EXIT.
+           EXIT.
+
+       P3000-BUILD-RECORD.
+      * BUILD THE 402 BYTE RECORD.  THE PREFIX GOES IN FRONT AND
+      * THE 400 BYTE HEADER FOLLOWS IT WHOLE AND UNALTERED, SO
+      * CABSXLDR CAN LIFT THE HEADER BACK OUT BY DROPPING THE
+      * FIRST TWO BYTES.
+           MOVE SPACES TO WS-LEDGER-RECORD.
+           MOVE WS-TEST-PREFIX TO WS-LR-PREFIX.
+           MOVE LK-SORT-RECORD TO WS-LR-BODY.
+           ADD LK-IH-TOTAL-DUE TO WS-TOTAL-DUE.
+           ADD LK-IH-CURR-CHG  TO WS-CURR-CHARGE.
+
+       P3000-EXIT.
+           EXIT.
+
+       P4000-RETURN-RECORD.
+      * POINT WORD ONE AT THE WORK AREA AND SET THE LENGTH HALFWORD
+      * ADDRESSED BY WORD TWO TO 402 BEFORE REPLYING 08.  SORT
+      * READS THE LENGTH AFTER THE EXIT RETURNS, NOT BEFORE.
+           MOVE 402 TO LK-REC-LENGTH.
+           SET LK-RECORD-PTR TO ADDRESS OF WS-LEDGER-RECORD.
+           ADD 1 TO WS-RETURN-CNT.
+           MOVE 8 TO RETURN-CODE.
+
+       P4000-EXIT.
+           EXIT.
+
+       P8000-END-OF-INPUT.
+      * A NULL RECORD ADDRESS MEANS SORTIN IS EXHAUSTED.  THE EXIT
+      * HAS NOTHING TO INSERT, SO IT REPLIES ZERO AND WRITES ITS
+      * TALLIES TO THE MESSAGE DATA SET.  THE INVOICE TOTALS ARE
+      * PRINTED SO THE CLOSE TEAM CAN SET THEM AGAINST THE FIGURE
+      * CABSXLDR PRINTS ON THE WAY OUT.
+           MOVE 'Y' TO WS-EOF-SEEN-SW.
+           DISPLAY 'CABSXLDG ENTRIES     ' WS-ENTRY-CNT.
+           DISPLAY 'CABSXLDG RETURNED    ' WS-RETURN-CNT.
+           DISPLAY 'CABSXLDG BLANK PREFIX' WS-PREFIX-BLANK.
+           DISPLAY 'CABSXLDG NON NUMERIC ' WS-PREFIX-NOT-NUM.
+           DISPLAY 'CABSXLDG NOT IN LIST ' WS-LEDGER-UNKNOWN.
+           DISPLAY 'CABSXLDG PREFIX RUNS ' WS-LEDGER-CHANGES.
+           DISPLAY 'CABSXLDG TOTAL DUE   ' WS-TOTAL-DUE.
+           DISPLAY 'CABSXLDG CURR CHARGE ' WS-CURR-CHARGE.
+           PERFORM P8400-SHOW-TALLY THRU P8400-EXIT
+                   VARYING WS-SX FROM 1 BY 1
+                   UNTIL WS-SX > 8.
+           MOVE ZERO TO RETURN-CODE.
+
+       P8000-EXIT.
+           EXIT.
+
+       P8400-SHOW-TALLY.
+           DISPLAY 'CABSXLDG ' WS-LG-CODE (WS-SX)
+                   ' ' WS-LG-NAME (WS-SX)
+                   ' ' WS-LG-INV-CNT (WS-SX).
+
+       P8400-EXIT.
+           EXIT.

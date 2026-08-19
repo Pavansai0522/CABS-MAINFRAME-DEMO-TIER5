@@ -1,0 +1,80 @@
+//CABU7030 JOB (CABS,UTIL),'RATE ELEMENT TO TARIFF CROSS',
+//             CLASS=B,MSGCLASS=X,MSGLEVEL=(1,1),
+//             NOTIFY=&SYSUID,REGION=0M,TIME=1440
+//*****************************************************************
+//* CABU7030 - RATE ELEMENT TO TARIFF CROSS REFERENCE             *
+//*                                                               *
+//* STEP010  CABUXR07                                             *
+//* STEP020  CABUXR04                                             *
+//* STEP030  CABUEX13                                             *
+//*                                                               *
+//* UTILITY STREAM.  SCHEDULED AFTER THE NIGHTLY                  *
+//* ACCESS BILLING STREAM COMPLETES.                              *
+//*****************************************************************
+//STEP010  EXEC PGM=CABUXR07,REGION=8M,
+//             PARM='&CYCLE'
+//STEPLIB  DD DSN=TELCABS.CABS.LOADLIB,DISP=SHR
+//         DD DSN=TELCABS.COMMON.LOADLIB,DISP=SHR
+//         DD DSN=SYS1.COB2LIB,DISP=SHR
+//SUSIN    DD DSN=TELCABS.CABS.SUSIN(0),DISP=SHR
+//LNKOUT   DD DSN=TELCABS.CABS.LNKOUT(+1),
+//             DISP=(NEW,CATLG,DELETE),
+//             UNIT=SYSDA,SPACE=(CYL,(10,10),RLSE),
+//             DCB=(RECFM=FB,LRECL=80,BLKSIZE=0)
+//SUSOUT   DD DSN=TELCABS.CABS.UTIL.SUSP(+1),
+//             DISP=(MOD,CATLG,DELETE),
+//             UNIT=SYSDA,SPACE=(TRK,(15,15),RLSE),
+//             DCB=(RECFM=FB,LRECL=300,BLKSIZE=0)
+//CTLOUT   DD DSN=TELCABS.CABS.CONTROL(+1),
+//             DISP=(MOD,CATLG,DELETE),
+//             UNIT=SYSDA,SPACE=(TRK,(5,5),RLSE),
+//             DCB=(RECFM=FB,LRECL=180,BLKSIZE=0)
+//RPTOUT   DD SYSOUT=*
+//SYSOUT   DD SYSOUT=*
+//SYSUDUMP DD SYSOUT=D
+//SYSIN    DD *
+RN%RUNID  %CYCLDT%BILLPRCABU7030STEP010 YY
+/*
+//*
+//STEP020  EXEC PGM=CABUXR04,REGION=4M,
+//             PARM='&CYCLE'
+//STEPLIB  DD DSN=TELCABS.CABS.LOADLIB,DISP=SHR
+//         DD DSN=TELCABS.COMMON.LOADLIB,DISP=SHR
+//         DD DSN=SYS1.COB2LIB,DISP=SHR
+//MSTIN    DD DSN=TELCABS.CABS.MSTIN(0),DISP=SHR
+//LNKOUT   DD DSN=TELCABS.CABS.LNKOUT(+1),
+//             DISP=(NEW,CATLG,DELETE),
+//             UNIT=SYSDA,SPACE=(CYL,(20,10),RLSE),
+//             DCB=(RECFM=FB,LRECL=80,BLKSIZE=0)
+//CTLOUT   DD DSN=TELCABS.CABS.CONTROL(+1),
+//             DISP=(MOD,CATLG,DELETE),
+//             UNIT=SYSDA,SPACE=(TRK,(5,5),RLSE),
+//             DCB=(RECFM=FB,LRECL=180,BLKSIZE=0)
+//RPTOUT   DD SYSOUT=*
+//SYSOUT   DD SYSOUT=*
+//SYSUDUMP DD SYSOUT=D
+//SYSIN    DD *
+RN%RUNID  %CYCLDT%BILLPRCABU7030STEP020 YY
+/*
+//*
+//STEP030  EXEC PGM=CABUEX13,REGION=8M,
+//             PARM='&CYCLE'
+//STEPLIB  DD DSN=TELCABS.CABS.LOADLIB,DISP=SHR
+//         DD DSN=TELCABS.COMMON.LOADLIB,DISP=SHR
+//         DD DSN=SYS1.COB2LIB,DISP=SHR
+//CIRIN    DD DSN=TELCABS.CABS.CIRIN(0),DISP=SHR
+//SELOUT   DD DSN=TELCABS.CABS.SELOUT(+1),
+//             DISP=(NEW,CATLG,DELETE),
+//             UNIT=SYSDA,SPACE=(CYL,(20,5),RLSE),
+//             DCB=(RECFM=FB,LRECL=80,BLKSIZE=0)
+//CTLOUT   DD DSN=TELCABS.CABS.CONTROL(+1),
+//             DISP=(MOD,CATLG,DELETE),
+//             UNIT=SYSDA,SPACE=(TRK,(5,5),RLSE),
+//             DCB=(RECFM=FB,LRECL=180,BLKSIZE=0)
+//SYSOUT   DD SYSOUT=*
+//SYSUDUMP DD SYSOUT=D
+//SYSIN    DD *
+RN%RUNID  %CYCLDT%BILLPRCABU7030STEP030 NY
+/*
+//*
+//
